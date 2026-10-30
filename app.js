@@ -521,7 +521,7 @@ async function checkUpdate(manual) {
     if (manual) alert("当前环境不支持在线检查更新");
     return;
   }
-  const localV = parseInt(window.XijiUpdater.getLocalVersion(), 10) || 0;
+  const localV = parseFloat(window.XijiUpdater.getLocalVersion()) || 0;
   const bases = [UPDATE_SOURCE, UPDATE_BACKUP];
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -530,7 +530,7 @@ async function checkUpdate(manual) {
         const r = await fetch(base + "version.json", { cache: "no-store" });
         if (!r.ok) throw new Error("HTTP " + r.status);
         const m = await r.json();
-        const remoteV = parseInt(m.version, 10) || 0;
+        const remoteV = parseFloat(m.version) || 0;
         if (remoteV > localV) {
           showUpdateModal(remoteV, localV, getUpdateNote(m), base);
           return;
