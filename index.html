@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>息记 · 独立版</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <!-- 顶部概览卡（参考息记） -->
+  <header class="hero">
+    <div class="hero-head">
+      <span class="logo">息记 · 独立版</span>
+      <span class="tag" id="syncTag">数据同步中…</span>
+    </div>
+    <div class="hero-grid">
+      <div class="hero-item">
+        <div class="label">累计收息天数</div>
+        <div class="value" id="accruedDays">-</div>
+      </div>
+      <div class="hero-item">
+        <div class="label">预测年度分红</div>
+        <div class="value big" id="predictedDiv">-</div>
+      </div>
+      <div class="hero-item">
+        <div class="label">总市值</div>
+        <div class="value" id="totalMv">-</div>
+      </div>
+      <div class="hero-item">
+        <div class="label">股息率</div>
+        <div class="value" id="divYield">-</div>
+      </div>
+      <div class="hero-item">
+        <div class="label">浮动盈亏</div>
+        <div class="value" id="totalPnl">-</div>
+      </div>
+      <div class="hero-item">
+        <div class="label">总收益率</div>
+        <div class="value" id="totalRet">-</div>
+      </div>
+      <div class="hero-item">
+        <div class="label">综合年化利润率</div>
+        <div class="value" id="annualRet">-</div>
+      </div>
+      <div class="hero-item">
+        <div class="label">持仓数</div>
+        <div class="value" id="holdCount">-</div>
+      </div>
+    </div>
+    <div class="hero-sub">
+      <span>年均现金流分红</span><strong id="cashFlow">-</strong>
+      <span>市值股息率</span><strong id="mvYield">-</strong>
+    </div>
+  </header>
+
+  <!-- AI 分析建议（红框位置） -->
+  <section class="section">
+    <div class="section-head">
+      <h2>AI 分析建议</h2>
+      <span class="ai-time" id="aiTime">-</span>
+    </div>
+    <div id="adviceBox" class="advice">
+      <div class="empty">正在生成分析建议…</div>
+    </div>
+  </section>
+
+  <!-- 持仓列表 -->
+  <section class="section">
+    <div class="section-head">
+      <h2>持仓明细</h2>
+      <button class="btn" id="btnAdd">+ 添加持仓</button>
+    </div>
+    <div id="holdings" class="holdings"></div>
+  </section>
+
+  <!-- 股市分红率排行 -->
+  <section class="section">
+    <div class="section-head">
+      <h2>股市分红率排行 TOP10</h2>
+      <span class="ai-time" id="rankTime">-</span>
+    </div>
+    <div id="rankBox"></div>
+  </section>
+</div>
+
+<!-- 编辑弹窗 -->
+<div class="modal" id="modal" style="display:none">
+  <div class="modal-box">
+    <h3 id="modalTitle">编辑持仓</h3>
+    <div class="form">
+      <label>名称<input id="f_name"></label>
+      <label>代码<input id="f_code"></label>
+      <label>持股数<input id="f_shares" type="number"></label>
+      <label>成本价<input id="f_cost" type="number" step="0.001"></label>
+      <label>现价<input id="f_price" type="number" step="0.001"></label>
+      <label>股息率(%)<input id="f_yield" type="number" step="0.01"></label>
+      <label>建仓日期<input id="f_date" type="date"></label>
+      <label>备注<input id="f_note"></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="btnCancel">取消</button>
+      <button class="btn danger" id="btnDelete" style="display:none">删除</button>
+      <button class="btn" id="btnSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
