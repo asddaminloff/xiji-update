@@ -510,7 +510,7 @@ async function refresh() {
 
 /* ---------- 远程升级（仅 App 环境生效） ---------- */
 const UPDATE_SOURCE = (localStorage.getItem("xiji_update_url") || "https://asddaminloff.github.io/xiji-update/");
-const UPDATE_BACKUP = "https://cdn.jsdelivr.net/gh/asddaminloff/xiji-update@main/"; // 备用源
+const UPDATE_BACKUP = "https://raw.githubusercontent.com/asddaminloff/xiji-update/main/"; // 备用源(raw 实时无长缓存)
 
 function getUpdateNote(m) {
   return (m && typeof m.note === "string" && m.note.trim()) ? m.note.trim() : "";
