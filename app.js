@@ -492,9 +492,67 @@ async function refresh() {
   }
 }
 
-// 每次打开页面：先刷新行情，再渲染全部
+/* ---------- 远程升级（仅 App 环境生效） ---------- */
+const UPDATE_SOURCE = (localStorage.getItem("xiji_update_url") || "https://asddaminloff.github.io/xiji-update/");
+
+async function checkUpdate() {
+  if (!window.XijiUpdater || !window.XijiUpdater.getLocalVersion) return;
+  try {
+    const r = await fetch(UPDATE_SOURCE + "version.json", { cache: "no-store" });
+    const m = await r.json();
+    const remoteV = parseInt(m.version, 10) || 0;
+    const localV = parseInt(window.XijiUpdater.getLocalVersion(), 10) || 0;
+    if (remoteV > localV) showUpdateModal(remoteV, localV);
+  } catch (e) { /* 离线静默，不打扰 */ }
+}
+
+function showUpdateModal(remoteV, localV) {
+  if (document.getElementById("xijiUpdateModal")) return;
+  const div = document.createElement("div");
+  div.id = "xijiUpdateModal";
+  div.className = "modal";
+  div.style.display = "flex";
+  div.innerHTML = `
+    <div class="modal-box">
+      <h3>发现新版本 v${remoteV}</h3>
+      <p style="color:#888;margin:8px 0 16px;line-height:1.6">当前版本 v${localV}，是否立即远程下载升级？<br>升级完成后自动重启页面。</p>
+      <div class="modal-actions">
+        <button class="btn ghost" id="btnUpdateLater">暂不升级</button>
+        <button class="btn" id="btnUpdateNow">立即升级</button>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
+  document.getElementById("btnUpdateLater").addEventListener("click", () => div.remove());
+  document.getElementById("btnUpdateNow").addEventListener("click", async () => {
+    const btn = document.getElementById("btnUpdateNow");
+    btn.textContent = "下载中…";
+    btn.disabled = true;
+    try {
+      const [html, js, css] = await Promise.all([
+        fetch(UPDATE_SOURCE + "index.html", { cache: "no-store" }).then((r) => r.text()),
+        fetch(UPDATE_SOURCE + "app.js", { cache: "no-store" }).then((r) => r.text()),
+        fetch(UPDATE_SOURCE + "style.css", { cache: "no-store" }).then((r) => r.text()),
+      ]);
+      window.XijiUpdater.saveUpdate(JSON.stringify({
+        version: remoteV,
+        index_html: html,
+        app_js: js,
+        style_css: css,
+      }));
+      alert("升级完成，正在重启页面");
+      location.reload();
+    } catch (e) {
+      btn.textContent = "立即升级";
+      btn.disabled = false;
+      alert("下载失败，请检查网络后重试");
+    }
+  });
+}
+
+// 每次打开页面：检查更新 + 刷新行情 + 渲染全部
 loadStore();
 (async function boot() {
+  checkUpdate();
   await refreshData();
   await refresh();
 })();
