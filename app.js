@@ -475,12 +475,24 @@ function collectForm() {
   };
 }
 
-/* ---------- 一键导入（识别截图数据，更新持仓明细） ---------- */
+/* ---------- 一键导入（选图 → 发送识别 → 更新持仓） ---------- */
 function importFromData() {
-  if (!IMPORT_DATA.length) return;
-  const names = IMPORT_DATA.map((d) => d.name).join("、");
-  if (!confirm("将从截图导入 " + IMPORT_DATA.length + " 只持仓（" + names + "），覆盖对应标的的股数与成本价，是否继续？")) return;
-  for (const d of IMPORT_DATA) {
+  // 1) 已有识别好的数据 → 确认后直接应用
+  const parsed = loadParsedImport();
+  if (parsed && parsed.length) {
+    const names = parsed.map((d) => d.name).join("、");
+    if (!confirm("检测到已识别的持仓数据（" + parsed.length + " 只：" + names + "），按此更新持仓？")) return;
+    applyImportData(parsed);
+    localStorage.removeItem("xiji_import_parsed");
+    return;
+  }
+  // 2) 无识别数据 → 打开系统相册选图
+  const inp = document.getElementById("importFile");
+  if (inp) inp.click();
+}
+
+function applyImportData(data) {
+  for (const d of data) {
     const old = holdings.find((h) => h.code === d.code);
     if (old) {
       old.name = d.name;
@@ -507,8 +519,49 @@ function importFromData() {
   refresh();
 }
 
+function loadParsedImport() {
+  try {
+    const raw = localStorage.getItem("xiji_import_parsed");
+    if (!raw) return null;
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) && arr.length ? arr : null;
+  } catch (e) { return null; }
+}
+
+function handleImportFile(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function (e) {
+    const img = new Image();
+    img.onload = function () {
+      const maxSide = 1280;
+      let w = img.width, h = img.height;
+      if (Math.max(w, h) > maxSide) {
+        if (w >= h) { h = Math.round((h * maxSide) / w); w = maxSide; }
+        else { w = Math.round((w * maxSide) / h); h = maxSide; }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      try {
+        localStorage.setItem("xiji_import_image", canvas.toDataURL("image/jpeg", 0.72));
+      } catch (err) {
+        alert("图片较大，保存失败，请换一张稍小的持仓截图");
+        return;
+      }
+      alert("图片已选择并保存。请把这张截图通过聊天发给电脑端 Marvis 完成识别，识别完成后再次点击“一键导入”即可自动更新持仓。");
+    };
+    img.onerror = function () { alert("图片读取失败，请重试"); };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  ev.target.value = "";
+}
+
 document.getElementById("btnAdd").addEventListener("click", openAdd);
 document.getElementById("btnImport").addEventListener("click", importFromData);
+document.getElementById("importFile").addEventListener("change", handleImportFile);
 document.getElementById("btnCancel").addEventListener("click", () => {
   document.getElementById("modal").style.display = "none";
 });
