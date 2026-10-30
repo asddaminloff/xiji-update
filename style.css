@@ -90,6 +90,8 @@ body {
 .rank-table td { color: #dbe3ec; }
 .rank-table td.yield { color: #ffd27a; font-weight: 700; }
 .rank-table tr:last-child td { border-bottom: none; }
+.rank-foot { display: flex; justify-content: center; padding: 12px 0 2px; }
+.rank-foot .btn { min-width: 130px; }
 .sub { font-size: 11px; color: #7c8fa3; }
 .tag-hold { font-size: 11px; color: #7ee0b0; background: #14302a; padding: 2px 8px; border-radius: 10px; }
 
