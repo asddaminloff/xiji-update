@@ -16,6 +16,15 @@ const SEED_HOLDINGS = [
   { id: 5, code: "601088", name: "中国神华", shares: 500, cost_price: 47.950, current_price: 51.060, dividend_yield: 0.0394, annual_div: 2.01, hold_date: "2025-10-10", note: "除息后分批建仓" },
   { id: 6, code: "601288", name: "农业银行", shares: 3000, cost_price: 6.152, current_price: 7.530, dividend_yield: 0.0332, annual_div: 0.25, hold_date: "2024-07-01", note: "银行收息" },
 ];
+/* 一键导入数据源（由截图识别生成，更新股数/成本价/现价） */
+const IMPORT_DATA = [
+  { code: "600028", name: "中国石化", shares: 11100, cost_price: 3.305, current_price: 5.900 },
+  { code: "000858", name: "五粮液", shares: 900, cost_price: 72.857, current_price: 74.700 },
+  { code: "512890", name: "红利低波ETF华泰柏瑞", shares: 40700, cost_price: 1.207, current_price: 1.243 },
+  { code: "600900", name: "长江电力", shares: 1400, cost_price: 27.979, current_price: 29.740 },
+  { code: "601088", name: "中国神华", shares: 500, cost_price: 47.950, current_price: 51.990 },
+  { code: "601288", name: "农业银行", shares: 3000, cost_price: 6.152, current_price: 7.480 },
+];
 const RANK_POOL = [
   ["600028", "中国石化", 0.30], ["601088", "中国神华", 2.01], ["600900", "长江电力", 1.00],
   ["601288", "农业银行", 0.25], ["000858", "五粮液", 5.16],
@@ -397,7 +406,7 @@ function renderAdvice(a) {
 }
 
 function renderRank(rows) {
-  const box = document.getElementById("rankBox");
+  const box = document.getElementById("rankBody");
   document.getElementById("rankTime").textContent = "按股息率从高到低";
   if (!rows.length) {
     box.innerHTML = '<div class="empty">暂无排行数据</div>';
@@ -466,7 +475,40 @@ function collectForm() {
   };
 }
 
+/* ---------- 一键导入（识别截图数据，更新持仓明细） ---------- */
+function importFromData() {
+  if (!IMPORT_DATA.length) return;
+  const names = IMPORT_DATA.map((d) => d.name).join("、");
+  if (!confirm("将从截图导入 " + IMPORT_DATA.length + " 只持仓（" + names + "），覆盖对应标的的股数与成本价，是否继续？")) return;
+  for (const d of IMPORT_DATA) {
+    const old = holdings.find((h) => h.code === d.code);
+    if (old) {
+      old.name = d.name;
+      old.shares = d.shares;
+      old.cost_price = d.cost_price;
+      old.current_price = d.current_price;
+      if (d.annual_div !== undefined && !isNaN(d.annual_div)) old.annual_div = d.annual_div;
+      if (!old.annual_div || isNaN(old.annual_div)) {
+        const poolHit = RANK_POOL.find((p) => p[0] === d.code);
+        old.annual_div = poolHit ? poolHit[2] : ((old.dividend_yield || 0) * (old.current_price || 0));
+      }
+    } else {
+      const poolHit = RANK_POOL.find((p) => p[0] === d.code);
+      holdings.push({
+        id: nextId++, code: d.code, name: d.name,
+        shares: d.shares, cost_price: d.cost_price, current_price: d.current_price,
+        annual_div: (d.annual_div !== undefined && !isNaN(d.annual_div)) ? d.annual_div : (poolHit ? poolHit[2] : 0),
+        dividend_yield: 0, hold_date: new Date().toISOString().slice(0, 10), note: "一键导入",
+      });
+    }
+  }
+  saveStore();
+  alert("导入成功，已更新持仓明细");
+  refresh();
+}
+
 document.getElementById("btnAdd").addEventListener("click", openAdd);
+document.getElementById("btnImport").addEventListener("click", importFromData);
 document.getElementById("btnCancel").addEventListener("click", () => {
   document.getElementById("modal").style.display = "none";
 });
