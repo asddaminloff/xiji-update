@@ -9,12 +9,12 @@ const clsPnl = (n) => (n > 0 ? "up" : n < 0 ? "down" : "");
 
 /* ---------- 静态种子数据 ---------- */
 const SEED_HOLDINGS = [
-  { id: 1, code: "600028", name: "中国石化", shares: 13600, cost_price: 3.781, current_price: 5.540, dividend_yield: 0.0542, hold_date: "2024-06-01", note: "收息主力" },
-  { id: 2, code: "000858", name: "五粮液", shares: 900, cost_price: 72.857, current_price: 70.930, dividend_yield: 0.0727, hold_date: "2025-01-15", note: "高息进攻" },
-  { id: 3, code: "512890", name: "红利低波ETF", shares: 40700, cost_price: 1.207, current_price: 1.232, dividend_yield: 0.0439, hold_date: "2025-08-10", note: "分散核心" },
-  { id: 4, code: "600900", name: "长江电力", shares: 1400, cost_price: 27.979, current_price: 29.990, dividend_yield: 0.0333, hold_date: "2024-08-01", note: "最稳底仓" },
-  { id: 5, code: "601088", name: "中国神华", shares: 500, cost_price: 47.950, current_price: 51.060, dividend_yield: 0.0394, hold_date: "2025-10-10", note: "除息后分批建仓" },
-  { id: 6, code: "601288", name: "农业银行", shares: 3000, cost_price: 6.152, current_price: 7.530, dividend_yield: 0.0332, hold_date: "2024-07-01", note: "银行收息" },
+  { id: 1, code: "600028", name: "中国石化", shares: 13600, cost_price: 3.781, current_price: 5.540, dividend_yield: 0.0542, annual_div: 0.30, hold_date: "2024-06-01", note: "收息主力" },
+  { id: 2, code: "000858", name: "五粮液", shares: 900, cost_price: 72.857, current_price: 70.930, dividend_yield: 0.0727, annual_div: 5.16, hold_date: "2025-01-15", note: "高息进攻" },
+  { id: 3, code: "512890", name: "红利低波ETF", shares: 40700, cost_price: 1.207, current_price: 1.232, dividend_yield: 0.0439, annual_div: 0.0541, hold_date: "2025-08-10", note: "分散核心" },
+  { id: 4, code: "600900", name: "长江电力", shares: 1400, cost_price: 27.979, current_price: 29.990, dividend_yield: 0.0333, annual_div: 1.00, hold_date: "2024-08-01", note: "最稳底仓" },
+  { id: 5, code: "601088", name: "中国神华", shares: 500, cost_price: 47.950, current_price: 51.060, dividend_yield: 0.0394, annual_div: 2.01, hold_date: "2025-10-10", note: "除息后分批建仓" },
+  { id: 6, code: "601288", name: "农业银行", shares: 3000, cost_price: 6.152, current_price: 7.530, dividend_yield: 0.0332, annual_div: 0.25, hold_date: "2024-07-01", note: "银行收息" },
 ];
 const RANK_POOL = [
   ["600028", "中国石化", 0.30], ["601088", "中国神华", 2.01], ["600900", "长江电力", 1.00],
@@ -52,6 +52,13 @@ function loadStore() {
     if (raw) {
       holdings = JSON.parse(raw);
       if (Array.isArray(holdings) && holdings.length) {
+        // 迁移：老数据无每股年分红时，优先取候选池值，否则用股息率×现价反推
+        for (const h of holdings) {
+          if (h.annual_div === undefined || isNaN(h.annual_div)) {
+            const poolHit = RANK_POOL.find((p) => p[0] === h.code);
+            h.annual_div = poolHit ? poolHit[2] : ((h.dividend_yield || 0) * (h.current_price || 0));
+          }
+        }
         nextId = Math.max(...holdings.map((h) => h.id)) + 1;
         return;
       }
@@ -120,13 +127,19 @@ function holdingMetrics(h) {
     days = Math.max(diff, 1);
   } catch (e) { /* ignore */ }
   const annual = ret > -1 ? Math.pow(1 + ret, 365.0 / days) - 1 : -1;
-  const annual_div = market_value * h.dividend_yield;
+  // 股息率随实时股价动态计算：每股年分红 ÷ 现价
+  if (h.annual_div === undefined || isNaN(h.annual_div)) {
+    const poolHit = RANK_POOL.find((p) => p[0] === h.code);
+    h.annual_div = poolHit ? poolHit[2] : ((h.dividend_yield || 0) * (h.current_price || 0));
+  }
+  h.dividend_yield = h.current_price > 0 ? h.annual_div / h.current_price : 0;
+  const annual_dividend = h.shares * h.annual_div;
   h.market_value = market_value;
   h.cost_total = cost_total;
   h.pnl = pnl;
   h.return_pct = ret * 100;
   h.annual_return_pct = annual * 100;
-  h.annual_dividend = annual_div;
+  h.annual_dividend = annual_dividend;
   h.hold_days = days;
   return h;
 }
@@ -419,7 +432,10 @@ function openEdit(id) {
   document.getElementById("f_shares").value = h.shares;
   document.getElementById("f_cost").value = h.cost_price;
   document.getElementById("f_price").value = h.current_price;
-  document.getElementById("f_yield").value = (h.dividend_yield * 100).toFixed(3);
+  const annualDiv = (h.annual_div !== undefined && !isNaN(h.annual_div))
+    ? h.annual_div
+    : ((RANK_POOL.find((p) => p[0] === h.code) || [0, 0, 0])[2] || ((h.dividend_yield || 0) * (h.current_price || 0)));
+  document.getElementById("f_annual_div").value = annualDiv.toFixed(3);
   document.getElementById("f_date").value = h.hold_date;
   document.getElementById("f_note").value = h.note || "";
   document.getElementById("btnDelete").style.display = "inline-block";
@@ -429,7 +445,7 @@ function openEdit(id) {
 function openAdd() {
   editingId = null;
   document.getElementById("modalTitle").textContent = "添加持仓";
-  ["f_name", "f_code", "f_shares", "f_cost", "f_price", "f_yield", "f_date", "f_note"].forEach((x) => {
+  ["f_name", "f_code", "f_shares", "f_cost", "f_price", "f_annual_div", "f_date", "f_note"].forEach((x) => {
     document.getElementById(x).value = "";
   });
   document.getElementById("f_date").value = new Date().toISOString().slice(0, 10);
@@ -444,7 +460,7 @@ function collectForm() {
     shares: parseFloat(document.getElementById("f_shares").value) || 0,
     cost_price: parseFloat(document.getElementById("f_cost").value) || 0,
     current_price: parseFloat(document.getElementById("f_price").value) || 0,
-    dividend_yield: (parseFloat(document.getElementById("f_yield").value) || 0) / 100,
+    annual_div: parseFloat(document.getElementById("f_annual_div").value) || 0,
     hold_date: document.getElementById("f_date").value,
     note: document.getElementById("f_note").value.trim(),
   };
