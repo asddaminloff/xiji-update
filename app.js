@@ -510,28 +510,54 @@ async function refresh() {
 
 /* ---------- 远程升级（仅 App 环境生效） ---------- */
 const UPDATE_SOURCE = (localStorage.getItem("xiji_update_url") || "https://asddaminloff.github.io/xiji-update/");
+const UPDATE_BACKUP = "https://cdn.jsdelivr.net/gh/asddaminloff/xiji-update@main/"; // 备用源
 
-async function checkUpdate() {
-  if (!window.XijiUpdater || !window.XijiUpdater.getLocalVersion) return;
-  try {
-    const r = await fetch(UPDATE_SOURCE + "version.json", { cache: "no-store" });
-    const m = await r.json();
-    const remoteV = parseInt(m.version, 10) || 0;
-    const localV = parseInt(window.XijiUpdater.getLocalVersion(), 10) || 0;
-    if (remoteV > localV) showUpdateModal(remoteV, localV);
-  } catch (e) { /* 离线静默，不打扰 */ }
+function getUpdateNote(m) {
+  return (m && typeof m.note === "string" && m.note.trim()) ? m.note.trim() : "";
 }
 
-function showUpdateModal(remoteV, localV) {
+async function checkUpdate(manual) {
+  if (!window.XijiUpdater || !window.XijiUpdater.getLocalVersion) {
+    if (manual) alert("当前环境不支持在线检查更新");
+    return;
+  }
+  const localV = parseInt(window.XijiUpdater.getLocalVersion(), 10) || 0;
+  const bases = [UPDATE_SOURCE, UPDATE_BACKUP];
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    for (const base of bases) {
+      try {
+        const r = await fetch(base + "version.json", { cache: "no-store" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const m = await r.json();
+        const remoteV = parseInt(m.version, 10) || 0;
+        if (remoteV > localV) {
+          showUpdateModal(remoteV, localV, getUpdateNote(m), base);
+          return;
+        }
+        if (manual) alert("当前已是最新版本 v" + localV);
+        return;
+      } catch (e) { lastErr = e; }
+    }
+    if (attempt < 2) await new Promise((res) => setTimeout(res, attempt === 0 ? 3000 : 8000));
+  }
+  if (manual) alert("检查更新失败，请检查网络后重试");
+}
+
+function showUpdateModal(remoteV, localV, note, base) {
   if (document.getElementById("xijiUpdateModal")) return;
   const div = document.createElement("div");
   div.id = "xijiUpdateModal";
   div.className = "modal";
   div.style.display = "flex";
+  const noteHtml = note
+    ? '<div style="background:#f5f7fa;border:1px solid #e2e6ed;border-radius:8px;padding:10px 12px;margin:10px 0 4px;text-align:left;line-height:1.7;white-space:pre-wrap;word-break:break-word"><b style="color:#222">本次更新内容：</b><br>' + note.replace(/</g, "&lt;").replace(/\n/g, "<br>") + '</div>'
+    : "";
   div.innerHTML = `
     <div class="modal-box">
       <h3>发现新版本 v${remoteV}</h3>
-      <p style="color:#888;margin:8px 0 16px;line-height:1.6">当前版本 v${localV}，是否立即远程下载升级？<br>升级完成后自动重启页面。</p>
+      <p style="color:#888;margin:8px 0 12px;line-height:1.6">当前版本 v${localV}，是否立即远程下载升级？<br>升级完成后自动重启页面。</p>
+      ${noteHtml}
       <div class="modal-actions">
         <button class="btn ghost" id="btnUpdateLater">暂不升级</button>
         <button class="btn" id="btnUpdateNow">立即升级</button>
@@ -545,9 +571,9 @@ function showUpdateModal(remoteV, localV) {
     btn.disabled = true;
     try {
       const [html, js, css] = await Promise.all([
-        fetch(UPDATE_SOURCE + "index.html", { cache: "no-store" }).then((r) => r.text()),
-        fetch(UPDATE_SOURCE + "app.js", { cache: "no-store" }).then((r) => r.text()),
-        fetch(UPDATE_SOURCE + "style.css", { cache: "no-store" }).then((r) => r.text()),
+        fetch(base + "index.html", { cache: "no-store" }).then((r) => r.text()),
+        fetch(base + "app.js", { cache: "no-store" }).then((r) => r.text()),
+        fetch(base + "style.css", { cache: "no-store" }).then((r) => r.text()),
       ]);
       window.XijiUpdater.saveUpdate(JSON.stringify({
         version: remoteV,
@@ -555,7 +581,10 @@ function showUpdateModal(remoteV, localV) {
         app_js: js,
         style_css: css,
       }));
-      alert("升级完成，正在重启页面");
+      const doneNote = note
+        ? "已更新到 v" + remoteV + "！\n\n本次更新内容：\n" + note
+        : "已更新到 v" + remoteV + "！\n\n本次为常规更新，暂无详细说明。";
+      alert(doneNote);
       location.reload();
     } catch (e) {
       btn.textContent = "立即升级";
@@ -565,10 +594,16 @@ function showUpdateModal(remoteV, localV) {
   });
 }
 
+// 手动检查更新入口
+document.addEventListener("DOMContentLoaded", function () {
+  const b = document.getElementById("btnCheckUpdate");
+  if (b) b.addEventListener("click", () => checkUpdate(true));
+});
+
 // 每次打开页面：检查更新 + 刷新行情 + 渲染全部
 loadStore();
 (async function boot() {
-  checkUpdate();
+  checkUpdate(false);
   await refreshData();
   await refresh();
 })();
