@@ -607,3 +607,24 @@ loadStore();
   await refreshData();
   await refresh();
 })();
+
+
+/* ---------- 区块折叠：AI分析建议 / 持仓明细 / 分红排行 ---------- */
+(function initCollapse() {
+  document.querySelectorAll(".sec-title").forEach(function (t) {
+    t.addEventListener("click", function () {
+      var target = document.getElementById(t.dataset.target);
+      if (!target) return;
+      var isHidden = target.style.display === "none";
+      target.style.display = isHidden ? "" : "none";
+      t.classList.toggle("collapsed", !isHidden);
+      try { localStorage.setItem("xiji_collapse_" + t.dataset.target, !isHidden ? "1" : "0"); } catch (e) {}
+    });
+    try {
+      if (localStorage.getItem("xiji_collapse_" + t.dataset.target) === "1") {
+        var tg = document.getElementById(t.dataset.target);
+        if (tg) { tg.style.display = "none"; t.classList.add("collapsed"); }
+      }
+    } catch (e) {}
+  });
+})();
