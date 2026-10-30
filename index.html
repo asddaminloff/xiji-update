@@ -69,6 +69,7 @@
   <section class="section">
     <div class="section-head">
       <div class="sec-title" data-target="holdings"><span class="arrow">▾</span><h2>持仓明细</h2></div>
+      <button class="btn ghost" id="btnImport">一键导入</button>
       <button class="btn" id="btnAdd">+ 添加持仓</button>
     </div>
     <div id="holdings" class="holdings"></div>
@@ -79,9 +80,13 @@
     <div class="section-head">
       <div class="sec-title" data-target="rankBox"><span class="arrow">▾</span><h2>股市分红率排行 TOP10</h2></div>
       <span class="ai-time" id="rankTime">-</span>
-      <button class="btn ghost" id="btnCheckUpdate">检查更新</button>
     </div>
-    <div id="rankBox"></div>
+    <div id="rankBox">
+      <div id="rankBody"></div>
+      <div class="rank-foot">
+        <button class="btn ghost" id="btnCheckUpdate">检查更新</button>
+      </div>
+    </div>
   </section>
 </div>
 
