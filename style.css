@@ -31,6 +31,9 @@ body {
 .section { margin-top: 16px; }
 .section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .section-head h2 { font-size: 15px; color: #c9d4e0; }
+.sec-title { display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; padding: 4px 0; }
+.sec-title .arrow { display: inline-block; transition: transform .2s ease; color: #7c8fa3; font-size: 12px; }
+.sec-title.collapsed .arrow { transform: rotate(-90deg); }
 .ai-time { font-size: 11px; color: #7c8fa3; }
 .btn {
   background: #ffd27a; color: #1a1a1a; border: none; border-radius: 8px;
