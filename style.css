@@ -65,11 +65,29 @@ body {
 /* 持仓卡 */
 .holdings { display: flex; flex-direction: column; gap: 10px; }
 .h-card {
+  position: relative; overflow: hidden;
   background: #161b24; border: 1px solid #2c3e4e; border-radius: 14px;
-  padding: 14px; display: flex; justify-content: space-between; gap: 10px; cursor: pointer;
   transition: transform .12s, border-color .12s;
+  touch-action: pan-y;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
 .h-card:hover { transform: translateY(-1px); border-color: #ffd27a88; }
+.h-card.dragging { z-index: 20; box-shadow: 0 6px 16px rgba(0,0,0,.4); }
+.h-card.dragging:hover { transform: none; }
+.h-del {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 88px;
+  display: flex; align-items: center; justify-content: center;
+  background: #d64545; color: #fff; font-size: 14px; font-weight: 600;
+  border-radius: 0 14px 14px 0;
+}
+.h-body {
+  position: relative; z-index: 1;
+  padding: 14px; display: flex; justify-content: space-between; gap: 10px; cursor: pointer;
+  background: #161b24; border-radius: 14px;
+  transition: transform .25s ease;
+}
+.h-card.swiped .h-body { transform: translateX(-88px); }
+.h-card.dragging .h-body { transition: none; }
 .h-left { flex: 1; min-width: 0; }
 .h-name { font-size: 15px; font-weight: 700; }
 .h-yield { font-size: 12px; color: #ffd27a; background: #2a2a18; padding: 1px 8px; border-radius: 10px; margin-left: 6px; }
