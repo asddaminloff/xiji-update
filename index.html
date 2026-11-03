@@ -8,6 +8,8 @@
 </head>
 <body>
 <div class="app">
+  <!-- 下拉刷新提示条 -->
+  <div class="pull-tip" id="pullTip"><span id="pullTipText">下拉刷新行情</span></div>
   <!-- 顶部概览卡（参考息记） -->
   <header class="hero">
     <div class="hero-head">
@@ -100,8 +102,9 @@
       <label>代码<input id="f_code"></label>
       <label>持股数<input id="f_shares" type="number"></label>
       <label>成本价<input id="f_cost" type="number" step="0.001"></label>
-      <label>现价<input id="f_price" type="number" step="0.001"></label>
-      <label>每股年分红(元)<input id="f_annual_div" type="number" step="0.001"></label>
+      <label>现价<input id="f_price" type="number" step="0.001" readonly placeholder="输入代码/名称后自动获取"></label>
+      <label>每股年分红(元)<input id="f_annual_div" type="number" step="0.001" readonly placeholder="自动获取"></label>
+      <div class="auto-fill-tip" id="autoFillTip"></div>
       <label>建仓日期<input id="f_date" type="date"></label>
       <label>备注<input id="f_note"></label>
     </div>
