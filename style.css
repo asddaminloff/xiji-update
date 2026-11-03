@@ -8,6 +8,15 @@ body {
 }
 .app { max-width: 860px; margin: 0 auto; padding: 16px 12px 40px; }
 
+/* 下拉刷新提示条 */
+.pull-tip {
+  height: 0; overflow: hidden; text-align: center; font-size: 13px; color: #8fa3b8;
+  transition: height .18s ease, color .18s ease; user-select: none;
+}
+.pull-tip.visible { height: 36px; line-height: 36px; }
+.pull-tip.ready { color: #ffd27a; }
+.pull-tip.refreshing { color: #ffd27a; }
+
 /* 顶部概览卡 */
 .hero {
   background: linear-gradient(135deg, #1a2332 0%, #203a3a 100%);
@@ -166,6 +175,11 @@ body {
   border-radius: 8px; padding: 8px 10px; color: #e8e8ee; font-size: 14px; outline: none;
 }
 .form input:focus { border-color: #ffd27a; }
+.form input[readonly] { background: #0b0e14; color: #8fa3b8; border-style: dashed; }
+.form input[readonly]:focus { border-color: #2c3e4e; }
+.auto-fill-tip { font-size: 12px; color: #8fa3b8; line-height: 1.5; padding: 0 2px; min-height: 16px; }
+.auto-fill-tip.ok { color: #26a69a; }
+.auto-fill-tip.err { color: #ef5350; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
 
 @media (max-width: 520px) {
