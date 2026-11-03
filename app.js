@@ -54,6 +54,8 @@ const STORE_KEY = "xiji_holdings_v1";
 let holdings = [];
 let editingId = null;
 let nextId = 100;
+let manualOrder = false; // 用户是否手动拖动排序过（true 后按 order 渲染）
+try { manualOrder = localStorage.getItem("xiji_manual_order") === "1"; } catch (e) {}
 
 function loadStore() {
   try {
@@ -340,7 +342,13 @@ function loadOverview(rows) {
 }
 
 function renderHoldings() {
-  const rows = holdings.map(holdingMetrics).sort((a, b) => b.market_value - a.market_value);
+  const raw = holdings.map(holdingMetrics);
+  let rows;
+  if (manualOrder) {
+    rows = raw.sort((a, b) => (a.order === undefined ? 1e9 : a.order) - (b.order === undefined ? 1e9 : b.order));
+  } else {
+    rows = raw.sort((a, b) => b.market_value - a.market_value);
+  }
   const box = document.getElementById("holdings");
   if (!rows.length) {
     box.innerHTML = '<div class="empty">暂无持仓，点击右上角「添加持仓」</div>';
@@ -348,22 +356,217 @@ function renderHoldings() {
   }
   box.innerHTML = rows.map((h) => `
     <div class="h-card" data-id="${h.id}">
-      <div class="h-left">
-        <div class="h-name">${h.name} <span class="h-yield">股息 ${pct(h.dividend_yield * 100)}</span></div>
-        <div class="h-code">${h.code} · 持${fmt(h.shares, 0)}股 · 成本${fmt(h.cost_price, 3)} → 现价${fmt(h.current_price, 3)}</div>
-        <div class="h-note">${h.note || ""} · 建仓${h.hold_date}（${h.hold_days}天）</div>
-      </div>
-      <div class="h-right">
-        <div class="h-mv">${yuan(h.market_value, 0)}</div>
-        <div class="h-meta">预计年分红 <b style="color:#ffd27a">${yuan(h.annual_dividend, 0)}</b></div>
-        <div class="h-pnl ${clsPnl(h.pnl)}">浮动 ${h.pnl >= 0 ? "+" : ""}${yuan(h.pnl, 0)}（${h.return_pct >= 0 ? "+" : ""}${pct(h.return_pct)}）</div>
-        <div class="h-annual">年化利润率 ${h.annual_return_pct >= 0 ? "+" : ""}${pct(h.annual_return_pct)}</div>
+      <div class="h-del" data-id="${h.id}">删除</div>
+      <div class="h-body">
+        <div class="h-left">
+          <div class="h-name">${h.name} <span class="h-yield">股息 ${pct(h.dividend_yield * 100)}</span></div>
+          <div class="h-code">${h.code} · 持${fmt(h.shares, 0)}股 · 成本${fmt(h.cost_price, 3)} → 现价${fmt(h.current_price, 3)}</div>
+          <div class="h-note">${h.note || ""} · 建仓${h.hold_date}（${h.hold_days}天）</div>
+        </div>
+        <div class="h-right">
+          <div class="h-mv">${yuan(h.market_value, 0)}</div>
+          <div class="h-meta">预计年分红 <b style="color:#ffd27a">${yuan(h.annual_dividend, 0)}</b></div>
+          <div class="h-pnl ${clsPnl(h.pnl)}">浮动 ${h.pnl >= 0 ? "+" : ""}${yuan(h.pnl, 0)}（${h.return_pct >= 0 ? "+" : ""}${pct(h.return_pct)}）</div>
+          <div class="h-annual">年化利润率 ${h.annual_return_pct >= 0 ? "+" : ""}${pct(h.annual_return_pct)}</div>
+        </div>
       </div>
     </div>
   `).join("");
-  box.querySelectorAll(".h-card").forEach((el) => {
-    el.addEventListener("click", () => openEdit(Number(el.dataset.id)));
+  initHoldingsTouch(box);
+}
+
+/* ---------- 持仓卡片交互：点击编辑 / 长按拖动排序 / 左滑删除 ---------- */
+let dragState = null;
+let suppressClick = false;
+
+function initHoldingsTouch(box) {
+  if (box.dataset.touchBound === "1") return;
+  box.dataset.touchBound = "1";
+
+  box.addEventListener("touchstart", onHoldTouchStart, { passive: false });
+  box.addEventListener("touchmove", onHoldTouchMove, { passive: false });
+  box.addEventListener("touchend", onHoldTouchEnd, { passive: false });
+  box.addEventListener("touchcancel", onHoldTouchCancel, { passive: false });
+
+  box.addEventListener("click", (e) => {
+    const delBtn = e.target.closest(".h-del");
+    if (delBtn) {
+      e.stopPropagation();
+      const id = Number(delBtn.dataset.id);
+      const h = holdings.find((x) => x.id === id);
+      if (h && confirm("确定删除「" + h.name + "」持仓？")) {
+        holdings = holdings.filter((x) => x.id !== id);
+        saveStore();
+        refresh();
+      }
+      return;
+    }
+    const card = e.target.closest(".h-card");
+    if (!card) return;
+    if (suppressClick) { suppressClick = false; return; }
+    if (card.classList.contains("swiped")) {
+      card.classList.remove("swiped");
+      const body = card.querySelector(".h-body");
+      if (body) body.style.transform = "translateX(0)";
+      return;
+    }
+    openEdit(Number(card.dataset.id));
   });
+}
+
+function onHoldTouchStart(e) {
+  if (e.touches.length !== 1) return;
+  const t = e.touches[0];
+  const card = e.target.closest(".h-card");
+  if (!card) return;
+  const body = card.querySelector(".h-body");
+  if (!body) return;
+  dragState = {
+    card, body,
+    startX: t.clientX,
+    startY: t.clientY,
+    mode: null, // null | swipe | drag
+    swiped: card.classList.contains("swiped"),
+    curOff: card.classList.contains("swiped") ? -88 : 0,
+    dragIndex: -1,
+    items: [],
+    timer: null,
+  };
+  dragState.timer = setTimeout(() => {
+    if (dragState && dragState.mode === null) {
+      const dx = Math.abs(t.clientX - dragState.startX);
+      const dy = Math.abs(t.clientY - dragState.startY);
+      if (dx < 10 && dy < 10) {
+        dragState.mode = "drag";
+        startDrag(dragState);
+      }
+    }
+  }, 450);
+}
+
+function onHoldTouchMove(e) {
+  if (!dragState) return;
+  const t = e.touches[0];
+  const dx = t.clientX - dragState.startX;
+  const dy = t.clientY - dragState.startY;
+
+  if (dragState.mode === null) {
+    if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      clearTimeout(dragState.timer);
+      dragState.mode = "swipe";
+      e.preventDefault();
+    } else if (Math.abs(dy) > 12) {
+      clearTimeout(dragState.timer);
+      dragState = null; // 纵向滚动交给系统
+    }
+    return;
+  }
+
+  if (dragState.mode === "swipe") {
+    e.preventDefault();
+    const base = dragState.swiped ? -88 : 0;
+    dragState.curOff = Math.max(-88, Math.min(0, base + dx));
+    dragState.body.style.transition = "none";
+    dragState.body.style.transform = "translateX(" + dragState.curOff + "px)";
+    return;
+  }
+
+  if (dragState.mode === "drag") {
+    e.preventDefault();
+    dragMove(t.clientY);
+  }
+}
+
+function onHoldTouchEnd(e) {
+  if (!dragState) return;
+  clearTimeout(dragState.timer);
+  const st = dragState;
+  dragState = null;
+  if (st.mode === "swipe") {
+    const snap = st.curOff < -40 ? -88 : 0;
+    st.body.style.transition = "";
+    st.body.style.transform = "translateX(" + snap + "px)";
+    st.card.classList.toggle("swiped", snap === -88);
+    suppressClick = true;
+    return;
+  }
+  if (st.mode === "drag") {
+    endDrag(st);
+    suppressClick = true;
+  }
+}
+
+function onHoldTouchCancel() {
+  if (!dragState) return;
+  clearTimeout(dragState.timer);
+  const st = dragState;
+  dragState = null;
+  if (st.mode === "drag") {
+    endDrag(st);
+  } else if (st.mode === "swipe") {
+    st.body.style.transition = "";
+    st.body.style.transform = "translateX(" + (st.swiped ? "-88px" : "0px") + ")";
+    st.card.classList.toggle("swiped", st.swiped);
+  }
+}
+
+function startDrag(st) {
+  const box = document.getElementById("holdings");
+  st.items = Array.from(box.querySelectorAll(".h-card"));
+  st.dragIndex = st.items.indexOf(st.card);
+  st.card.classList.add("dragging");
+  st.card.style.transform = "translateY(0)";
+}
+
+function dragMove(clientY) {
+  const st = dragState;
+  const box = document.getElementById("holdings");
+  // 跟手位移（保持抓取点）
+  st.card.style.transform = "translateY(" + (clientY - st.startY) + "px)";
+  // 计算插入位置：按手指 y 与各卡中点比较
+  let target = st.dragIndex;
+  const items = st.items;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i] === st.card) continue;
+    const r = items[i].getBoundingClientRect();
+    const mid = r.top + r.height / 2;
+    if (clientY < mid) { target = i; break; }
+    target = i + 1;
+  }
+  if (target > st.dragIndex) target--;
+  if (target !== st.dragIndex && target >= 0 && target < items.length) {
+    const next = items[target];
+    if (next) {
+      if (target > st.dragIndex) box.insertBefore(st.card, next.nextSibling);
+      else box.insertBefore(st.card, next);
+    } else {
+      box.appendChild(st.card);
+    }
+    items.splice(st.dragIndex, 1);
+    items.splice(target, 0, st.card);
+    st.dragIndex = target;
+  }
+}
+
+function endDrag(st) {
+  st.card.classList.remove("dragging");
+  st.card.style.transform = "";
+  // 用户手动排序后切换为自定义顺序
+  if (!manualOrder) {
+    manualOrder = true;
+    try { localStorage.setItem("xiji_manual_order", "1"); } catch (e) {}
+  }
+  const ids = Array.from(document.getElementById("holdings").querySelectorAll(".h-card")).map((el) => Number(el.dataset.id));
+  ids.forEach((id, idx) => {
+    const h = holdings.find((x) => x.id === id);
+    if (h) h.order = idx;
+  });
+  let maxOrder = ids.length - 1;
+  holdings.forEach((h) => {
+    if (h.order === undefined) h.order = ++maxOrder;
+  });
+  saveStore();
+  refresh();
 }
 
 function renderAdvice(a) {
@@ -486,9 +689,13 @@ function importFromData() {
     localStorage.removeItem("xiji_import_parsed");
     return;
   }
-  // 2) 无识别数据 → 打开系统相册选图
-  const inp = document.getElementById("importFile");
-  if (inp) inp.click();
+  // 2) 无识别数据 → 优先调原生选图桥接（确保弹出系统相册/文件选择器），无桥接时回退隐藏 input
+  if (window.XijiUpdater && typeof XijiUpdater.openImagePicker === "function") {
+    XijiUpdater.openImagePicker();
+  } else {
+    const inp = document.getElementById("importFile");
+    if (inp) inp.click();
+  }
 }
 
 function applyImportData(data) {
@@ -558,6 +765,18 @@ function handleImportFile(ev) {
   reader.readAsDataURL(file);
   ev.target.value = "";
 }
+
+// 原生桥接选图回调（MainActivity 选图并压缩为 JPEG base64 后回传）
+window.__onImportImage = function (dataUrl) {
+  if (!dataUrl) { alert("未选择图片，已取消导入"); return; }
+  try {
+    localStorage.setItem("xiji_import_image", dataUrl);
+  } catch (e) {
+    alert("图片较大，保存失败，请换一张稍小的持仓截图");
+    return;
+  }
+  alert("图片已选择并保存。请把这张截图通过聊天发给电脑端 Marvis 完成识别，识别完成后再次点击“一键导入”即可自动更新持仓。");
+};
 
 document.getElementById("btnAdd").addEventListener("click", openAdd);
 document.getElementById("btnImport").addEventListener("click", importFromData);
