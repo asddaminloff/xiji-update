@@ -102,6 +102,127 @@ async function fetchQuotes(codes) {
   } catch (e) { return {}; }
 }
 
+/* ---------- 自动获取行情（名称搜索 + 行情详情 + 年度分红） ---------- */
+let _gbkDecoder = null;
+function decodeGbk(buf) {
+  if (!_gbkDecoder) { try { _gbkDecoder = new TextDecoder("gbk"); } catch (e) { _gbkDecoder = null; } }
+  if (_gbkDecoder) { try { return _gbkDecoder.decode(buf); } catch (e) { return ""; } }
+  return new TextDecoder().decode(buf);
+}
+
+// 输入名称 → 腾讯智能搜索 → 返回 6 位代码
+async function searchCodeByName(name) {
+  try {
+    const url = "https://smartbox.gtimg.cn/s3/?v=2&q=" + encodeURIComponent(name) + "&t=all";
+    const r = await fetch(url);
+    const buf = await r.arrayBuffer();
+    const text = decodeGbk(buf);
+    const m = text.match(/v_hint="([^"]*)"/);
+    if (!m) return null;
+    const first = m[1].split(";")[0];
+    const parts = first.split("~");
+    if (parts.length >= 2 && /^\d{6}$/.test(parts[1])) return parts[1];
+    return null;
+  } catch (e) { return null; }
+}
+
+// 代码 → 现价 + 名称（GBK 解码）
+async function fetchQuoteDetail(code) {
+  try {
+    const url = "https://qt.gtimg.cn/q=" + symbolOf(code);
+    const r = await fetch(url);
+    const buf = await r.arrayBuffer();
+    const text = decodeGbk(buf);
+    const m = text.match(/v_(?:sh|sz)\d+="([^"]*)"/);
+    if (!m) return null;
+    const parts = m[1].split("~");
+    const price = parseFloat(parts[3]);
+    if (isNaN(price) || price <= 0) return null;
+    return { name: parts[1] || "", price };
+  } catch (e) { return null; }
+}
+
+// 代码 → 每股年分红：东财分红送配，最近365天已实施的每股派息合计（10派X元 → X/10）
+async function fetchAnnualDiv(code) {
+  try {
+    const filter = encodeURIComponent('(SECURITY_CODE="' + code + '")');
+    const url = "https://datacenter-web.eastmoney.com/api/data/v1/get?sortColumns=EX_DIVIDEND_DATE&sortTypes=-1&pageSize=8&pageNumber=1&reportName=RPT_SHAREBONUS_DET&columns=SECURITY_CODE,EX_DIVIDEND_DATE,IMPL_PLAN_PROFILE,PRETAX_BONUS_RMB&filter=" + filter;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (!j || !j.result || !j.result.data) return null;
+    const cutoff = Date.now() - 365 * 86400000;
+    let total = 0;
+    for (const it of j.result.data) {
+      const ex = it.EX_DIVIDEND_DATE || "";
+      if (!/^\d{4}-\d{2}-\d{2}/.test(ex)) continue;
+      const exTs = new Date(ex.replace(/-/g, "/")).getTime();
+      if (isNaN(exTs) || exTs < cutoff || exTs > Date.now() + 86400000) continue;
+      let per10 = parseFloat(it.PRETAX_BONUS_RMB);
+      if (isNaN(per10) || per10 <= 0) {
+        const mm = (it.IMPL_PLAN_PROFILE || "").match(/10派([\d.]+)元/);
+        per10 = mm ? parseFloat(mm[1]) : 0;
+      }
+      if (!isNaN(per10) && per10 > 0) total += per10 / 10;
+    }
+    return total > 0 ? total : null;
+  } catch (e) { return null; }
+}
+
+// 添加/编辑表单：输入名称或代码后自动识别并填入现价、每股年分红
+let autoFillTimer = null;
+let autoFillSeq = 0;
+function scheduleAutoFill() {
+  clearTimeout(autoFillTimer);
+  autoFillTimer = setTimeout(runAutoFill, 400);
+}
+async function runAutoFill() {
+  const tip = document.getElementById("autoFillTip");
+  if (!tip) return;
+  const codeRaw = (document.getElementById("f_code").value || "").trim();
+  const nameRaw = (document.getElementById("f_name").value || "").trim();
+  if (!codeRaw && !nameRaw) {
+    tip.textContent = "输入股票名称或代码后自动获取现价与年分红";
+    tip.className = "auto-fill-tip";
+    return;
+  }
+  const seq = ++autoFillSeq;
+  let code = /^\d{6}$/.test(codeRaw) ? codeRaw : null;
+  tip.textContent = "正在识别并获取行情…";
+  tip.className = "auto-fill-tip";
+  if (!code) {
+    code = await searchCodeByName(nameRaw || codeRaw);
+  }
+  if (seq !== autoFillSeq) return;
+  if (!code) {
+    tip.textContent = "未能识别该股票，请核对名称或输入 6 位代码";
+    tip.className = "auto-fill-tip err";
+    return;
+  }
+  document.getElementById("f_code").value = code;
+  const detail = await fetchQuoteDetail(code);
+  if (seq !== autoFillSeq) return;
+  if (detail) {
+    if (!document.getElementById("f_name").value.trim()) document.getElementById("f_name").value = detail.name;
+    document.getElementById("f_price").value = detail.price.toFixed(3);
+  }
+  let div = null;
+  const poolHit = RANK_POOL.find((p) => p[0] === code);
+  if (poolHit) div = poolHit[2];
+  else div = await fetchAnnualDiv(code);
+  if (seq !== autoFillSeq) return;
+  if (div !== null && !isNaN(div) && div > 0) document.getElementById("f_annual_div").value = div.toFixed(3);
+  if (detail && div !== null && div > 0) {
+    tip.textContent = "已自动获取：现价 ¥" + detail.price.toFixed(3) + "，每股年分红 ¥" + div.toFixed(3);
+    tip.className = "auto-fill-tip ok";
+  } else if (detail) {
+    tip.textContent = "已获取现价，分红数据获取失败，请检查后重试";
+    tip.className = "auto-fill-tip err";
+  } else {
+    tip.textContent = "获取行情失败，请检查网络或核对输入";
+    tip.className = "auto-fill-tip err";
+  }
+}
+
 async function fetchKlineRange(code) {
   try {
     const url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=" + symbolOf(code) + ",day,,,60,qfq";
@@ -662,6 +783,9 @@ function openAdd() {
   });
   document.getElementById("f_date").value = new Date().toISOString().slice(0, 10);
   document.getElementById("btnDelete").style.display = "none";
+  const tip = document.getElementById("autoFillTip");
+  if (tip) { tip.textContent = "输入股票名称或代码后自动获取现价与年分红"; tip.className = "auto-fill-tip"; }
+  autoFillSeq++;
   document.getElementById("modal").style.display = "flex";
 }
 
@@ -784,9 +908,23 @@ document.getElementById("importFile").addEventListener("change", handleImportFil
 document.getElementById("btnCancel").addEventListener("click", () => {
   document.getElementById("modal").style.display = "none";
 });
-document.getElementById("btnSave").addEventListener("click", () => {
+document.getElementById("btnSave").addEventListener("click", async () => {
   const body = collectForm();
   if (!body.name) { alert("请填写名称"); return; }
+  // 现价/年分红为自动获取字段：未获取到时不落脏数据
+  if (!(body.current_price > 0)) {
+    tipHint("err", "现价尚未获取，正在重试自动获取…");
+    await runAutoFill();
+    const retry = collectForm();
+    if (!(retry.current_price > 0)) { alert("未能获取现价，请确认股票名称/代码正确且网络可用后重试"); return; }
+    body.current_price = retry.current_price;
+    body.annual_div = retry.annual_div;
+    body.name = retry.name || body.name;
+  }
+  if (!(body.annual_div > 0)) {
+    const poolHit = RANK_POOL.find((p) => p[0] === body.code);
+    if (poolHit) body.annual_div = poolHit[2];
+  }
   if (editingId) {
     const idx = holdings.findIndex((x) => x.id === editingId);
     if (idx >= 0) holdings[idx] = Object.assign({}, holdings[idx], body);
@@ -846,7 +984,7 @@ async function checkUpdate(manual) {
         const m = await r.json();
         const remoteV = parseFloat(m.version) || 0;
         if (remoteV > localV) {
-          showUpdateModal(remoteV, localV, getUpdateNote(m), base);
+          showUpdateModal(remoteV, localV, getUpdateNote(m), base, m.require_reinstall === true);
           return;
         }
         if (manual) alert("当前已是最新版本 v" + localV);
@@ -858,12 +996,15 @@ async function checkUpdate(manual) {
   if (manual) alert("检查更新失败，请检查网络后重试");
 }
 
-function showUpdateModal(remoteV, localV, note, base) {
+function showUpdateModal(remoteV, localV, note, base, requireReinstall) {
   if (document.getElementById("xijiUpdateModal")) return;
   const div = document.createElement("div");
   div.id = "xijiUpdateModal";
   div.className = "modal";
   div.style.display = "flex";
+  const reinstallTip = requireReinstall
+    ? '<div style="background:#3a2a22;border:1px solid #b5673a;border-radius:8px;padding:8px 12px;margin:10px 0 4px;text-align:left;line-height:1.6;color:#ffd27a"><b>注意：</b>此版本包含 App 原生功能改动，在线热更后部分功能（如相册选图）仍需<b>重新安装 APK</b> 才能完整生效。</div>'
+    : "";
   const noteHtml = note
     ? '<div style="background:#f5f7fa;border:1px solid #e2e6ed;border-radius:8px;padding:10px 12px;margin:10px 0 4px;text-align:left;line-height:1.7;white-space:pre-wrap;word-break:break-word"><b style="color:#222">本次更新内容：</b><br>' + note.replace(/</g, "&lt;").replace(/\n/g, "<br>") + '</div>'
     : "";
@@ -871,6 +1012,7 @@ function showUpdateModal(remoteV, localV, note, base) {
     <div class="modal-box">
       <h3>发现新版本 v${remoteV}</h3>
       <p style="color:#888;margin:8px 0 12px;line-height:1.6">当前版本 v${localV}，是否立即远程下载升级？<br>升级完成后自动重启页面。</p>
+      ${reinstallTip}
       ${noteHtml}
       <div class="modal-actions">
         <button class="btn ghost" id="btnUpdateLater">暂不升级</button>
@@ -895,9 +1037,15 @@ function showUpdateModal(remoteV, localV, note, base) {
         app_js: js,
         style_css: css,
       }));
-      const doneNote = note
-        ? "已更新到 v" + remoteV + "！\n\n本次更新内容：\n" + note
-        : "已更新到 v" + remoteV + "！\n\n本次为常规更新，暂无详细说明。";
+      const hasNativeBridge = window.XijiUpdater && typeof window.XijiUpdater.openImagePicker === "function";
+      let doneNote;
+      if (requireReinstall || !hasNativeBridge) {
+        doneNote = "已更新页面资源到 v" + remoteV + "！\n\n注意：当前 App 壳版本较旧，本次更新包含原生功能（如相册选图），在线热更无法完整生效，请重新安装最新 APK 后使用完整功能。\n\n" + (note ? "本次更新内容：\n" + note : "");
+      } else {
+        doneNote = note
+          ? "已更新到 v" + remoteV + "！\n\n本次更新内容：\n" + note
+          : "已更新到 v" + remoteV + "！\n\n本次为常规更新，暂无详细说明。";
+      }
       alert(doneNote);
       location.reload();
     } catch (e) {
@@ -942,3 +1090,77 @@ loadStore();
     } catch (e) {}
   });
 })();
+
+/* ---------- 自动获取行情：输入绑定 ---------- */
+function tipHint(cls, text) {
+  const tip = document.getElementById("autoFillTip");
+  if (!tip) return;
+  tip.className = "auto-fill-tip" + (cls ? " " + cls : "");
+  tip.textContent = text;
+}
+["f_code", "f_name"].forEach((id) => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("input", scheduleAutoFill);
+});
+
+/* ---------- 下拉刷新：更新最新股价与 AI 分析建议 ---------- */
+let pull = { startY: 0, active: false, pulling: false, refreshing: false };
+const PULL_THRESHOLD = 60;
+function setPullTip(state, text) {
+  const tip = document.getElementById("pullTip");
+  const txt = document.getElementById("pullTipText");
+  if (!tip || !txt) return;
+  if (text) txt.textContent = text;
+  tip.classList.toggle("visible", state === "show" || state === "ready" || state === "refreshing");
+  tip.classList.toggle("ready", state === "ready");
+  tip.classList.toggle("refreshing", state === "refreshing");
+}
+async function doRefresh() {
+  if (pull.refreshing) return;
+  pull.refreshing = true;
+  setPullTip("refreshing", "正在刷新行情与策略…");
+  try {
+    await refreshData();
+    await refresh();
+    const now = new Date();
+    setPullTip("refreshing", "刷新完成 " + now.getHours() + ":" + String(now.getMinutes()).padStart(2, "0"));
+  } catch (e) {
+    setPullTip("refreshing", "刷新失败，请重试");
+  }
+  setTimeout(() => {
+    pull.refreshing = false;
+    pull.pulling = false;
+    setPullTip("hide", "下拉刷新行情");
+  }, 900);
+}
+document.addEventListener("touchstart", (e) => {
+  if (pull.refreshing) return;
+  if (e.target.closest(".h-card")) return; // 持仓卡片手势优先
+  if (window.scrollY > 0) return;
+  pull.startY = e.touches[0].clientY;
+  pull.active = true;
+  pull.pulling = false;
+}, { passive: true });
+document.addEventListener("touchmove", (e) => {
+  if (!pull.active || pull.refreshing) return;
+  if (e.target.closest(".h-card")) return;
+  const dy = e.touches[0].clientY - pull.startY;
+  if (dy > 0 && window.scrollY <= 0) {
+    if (dy > 8) e.preventDefault();
+    pull.pulling = true;
+    if (dy >= PULL_THRESHOLD) setPullTip("ready", "释放刷新行情");
+    else setPullTip("show", "下拉刷新行情");
+  } else if (pull.pulling) {
+    pull.pulling = false;
+    setPullTip("hide", "下拉刷新行情");
+  }
+}, { passive: false });
+document.addEventListener("touchend", (e) => {
+  if (!pull.active) return;
+  pull.active = false;
+  if (!pull.pulling) return;
+  pull.pulling = false;
+  const dy = e.changedTouches[0].clientY - pull.startY;
+  if (dy >= PULL_THRESHOLD) doRefresh();
+  else setPullTip("hide", "下拉刷新行情");
+}, { passive: true });
