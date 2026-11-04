@@ -18,12 +18,12 @@ const SEED_HOLDINGS = [
 ];
 /* 一键导入数据源（由截图识别生成，更新股数/成本价/现价） */
 const IMPORT_DATA = [
-  { code: "600028", name: "中国石化", shares: 11100, cost_price: 3.305, current_price: 5.900 },
-  { code: "000858", name: "五粮液", shares: 900, cost_price: 72.857, current_price: 74.700 },
-  { code: "512890", name: "红利低波ETF华泰柏瑞", shares: 40700, cost_price: 1.207, current_price: 1.243 },
-  { code: "600900", name: "长江电力", shares: 1400, cost_price: 27.979, current_price: 29.740 },
-  { code: "601088", name: "中国神华", shares: 500, cost_price: 47.950, current_price: 51.990 },
-  { code: "601288", name: "农业银行", shares: 3000, cost_price: 6.152, current_price: 7.480 },
+  { code: "600028", name: "中国石化", shares: 11100, cost_price: 3.307, current_price: 5.810 },
+  { code: "000858", name: "五粮液", shares: 700, cost_price: 71.949, current_price: 75.870 },
+  { code: "512890", name: "红利低波ETF华泰柏瑞", shares: 40700, cost_price: 1.207, current_price: 1.241 },
+  { code: "600900", name: "长江电力", shares: 1600, cost_price: 28.153, current_price: 30.020 },
+  { code: "601088", name: "中国神华", shares: 500, cost_price: 47.950, current_price: 51.730 },
+  { code: "601288", name: "农业银行", shares: 6400, cost_price: 6.788, current_price: 7.380 },
 ];
 const RANK_POOL = [
   ["600028", "中国石化", 0.30], ["601088", "中国神华", 2.01], ["600900", "长江电力", 1.00],
