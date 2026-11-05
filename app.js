@@ -347,6 +347,20 @@ function pickStrategy(h, kl, poolAvg, weight) {
   return ["dca", "20日中位（" + Math.round(pos * 100) + "%）且趋势平稳，按定投平均成本法固定周期买入，不择时"];
 }
 
+/* 操作建议（持有/加仓/减仓/定投）：与 pickStrategy 同源映射 */
+function pickOp(sk, pos, weight) {
+  if (pos !== null && pos <= 0.25) return { op: "add", text: "加仓" };
+  if (pos !== null && pos >= 0.75 && weight >= 0.25) return { op: "reduce", text: "减仓" };
+  switch (sk) {
+    case "pyramid": return { op: "add", text: "加仓" };
+    case "rebalance": return { op: "reduce", text: "减仓" };
+    case "grid": return { op: "hold", text: "持有" };
+    case "ma_cross": return { op: "hold", text: "持有" };
+    case "barbell": return { op: "hold", text: "持有" };
+    default: return { op: "dca", text: "定投" };
+  }
+}
+
 async function computeAdvice(rows, pool, quotes) {
   const total_mv = rows.reduce((s, r) => s + r.market_value, 0);
   const total_div = rows.reduce((s, r) => s + r.annual_dividend, 0);
@@ -391,17 +405,20 @@ async function computeAdvice(rows, pool, quotes) {
         code: h.code, name: h.name, weight: weight * 100,
         yield: h.dividend_yield * 100, pos: null,
         strategy: "dca", strategy_name: "定投平均成本",
+        op: "dca", op_text: "定投",
         advice: h.name + "：K线数据获取失败，保守按默认定投执行",
       });
       continue;
     }
     const [sk, note] = pickStrategy(h, kl, poolAvg, weight);
     const sname = STRATEGY_POOL.find((s) => s.key === sk)?.name || sk;
+    const op = pickOp(sk, kl.pos, weight);
     stock_advice.push({
       code: h.code, name: h.name, weight: weight * 100,
       yield: h.dividend_yield * 100, pos: kl.pos,
       amp20: kl.amp20 * 100,
       strategy: sk, strategy_name: sname,
+      op: op.op, op_text: op.text,
       advice: h.name + "（" + h.code + "）：权重 " + Math.round(weight * 100) + "%、股息率 " + (h.dividend_yield * 100).toFixed(2) + "%、20日位置 " + Math.round(kl.pos * 100) + "% → 推荐策略【" + sname + "】：" + note,
     });
   }
@@ -702,6 +719,7 @@ function renderAdvice(a) {
         <b>${s.name}</b>
         <span class="sub">${s.code} · 权重${s.weight}% · 股息率${s.yield}%${s.pos !== null ? " · 20日位置" + Math.round(s.pos * 100) + "%" : ""}</span>
         <span class="badge-sm">${s.strategy_name}</span>
+        ${s.op_text ? `<span class="badge-op">${s.op_text}</span>` : ""}
       </div>
       <div class="stock-line-text">${s.advice}</div>
     </div>
