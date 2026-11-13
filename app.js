@@ -245,6 +245,481 @@ async function fetchKlineRange(code) {
   } catch (e) { return null; }
 }
 
+/* ========== K线视图 + 副图公式引擎（v2.2） ========== */
+const DEFAULT_FORMULA = `MID:=MA(CLOSE,20);
+TMP:=STD(CLOSE,20);
+TOP:=MID+2*TMP;
+BOTTOM:=MID-2*TMP;
+BOLLB:=(CLOSE-BOTTOM)/(TOP-BOTTOM);
+WIDTH:=0.6*(TOP-BOTTOM)/MID;
+BOLLB_LINE:BOLLB,colorred;
+WIDTH_LINE:WIDTH,colorblack;
+B条件:=CROSS(BOLLB,WIDTH);
+S条件:=REF(BOLLB,1)>1 AND BOLLB<1;
+DRAWTEXT(B条件,BOLLB*0.95,'B'),colorred;
+DRAWTEXT(S条件,BOLLB*1.05,'S'),colorgreen;
+0,colorgray,DOTLINE;
+0.5,colorgray,DOTLINE;
+1,colorgray,DOTLINE;`;
+
+async function fetchKlineFull(code, days) {
+  try {
+    const url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=" + symbolOf(code) + ",day,,," + days + ",qfq";
+    const r = await fetch(url);
+    const j = await r.json();
+    const d = (j.data || {})[symbolOf(code)] || {};
+    const klines = d.qfqday || d.day || [];
+    return klines.map((k) => ({
+      date: String(k[0]),
+      open: parseFloat(k[1]),
+      close: parseFloat(k[2]),
+      high: parseFloat(k[3]),
+      low: parseFloat(k[4]),
+      volume: k[5] ? parseFloat(k[5]) : 0,
+    })).filter((k) => isFinite(k.open) && isFinite(k.close));
+  } catch (e) { return null; }
+}
+
+/* ---------- 通达信子集公式引擎 ---------- */
+const XijiFormula = (function () {
+  const DATA_NAMES = { CLOSE: "close", OPEN: "open", HIGH: "high", LOW: "low", VOL: "volume", VOLUME: "volume" };
+  const COLOR_MAP = { red: "#e04343", green: "#35b86b", black: "#2b2f36", gray: "#9aa3ad", blue: "#3b82f6", white: "#ffffff", yellow: "#ffd27a" };
+
+  function tokenize(src) {
+    const tokens = [];
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === " " || c === "\t" || c === "\n" || c === "\r") { i++; continue; }
+      if (c === "/" && src[i + 1] === "/") { while (i < src.length && src[i] !== "\n") i++; continue; }
+      if (/[0-9]/.test(c) || (c === "." && /[0-9]/.test(src[i + 1] || ""))) {
+        let j = i; while (j < src.length && /[0-9.]/.test(src[j])) j++;
+        tokens.push({ t: "num", v: parseFloat(src.slice(i, j)) }); i = j; continue;
+      }
+      if (/[A-Za-z_\u4e00-\u9fa5]/.test(c)) {
+        let j = i; while (j < src.length && /[A-Za-z0-9_\u4e00-\u9fa5]/.test(src[j])) j++;
+        tokens.push({ t: "id", n: src.slice(i, j) }); i = j; continue;
+      }
+      if (c === "'") {
+        let j = i + 1; while (j < src.length && src[j] !== "'") j++;
+        tokens.push({ t: "str", v: src.slice(i + 1, j) }); i = j + 1; continue;
+      }
+      if (c === ":" && src[i + 1] === "=") { tokens.push({ t: "assign" }); i += 2; continue; }
+      if (c === ":") { tokens.push({ t: "colon" }); i += 1; continue; }
+      if (c === ";") { tokens.push({ t: "semi" }); i += 1; continue; }
+      if (c === ",") { tokens.push({ t: "comma" }); i += 1; continue; }
+      if (c === "(") { tokens.push({ t: "lparen" }); i += 1; continue; }
+      if (c === ")") { tokens.push({ t: "rparen" }); i += 1; continue; }
+      if (c === ">" && src[i + 1] === "=") { tokens.push({ t: "op", v: ">=" }); i += 2; continue; }
+      if (c === "<" && src[i + 1] === "=") { tokens.push({ t: "op", v: "<=" }); i += 2; continue; }
+      if ("+-*/><".indexOf(c) >= 0) { tokens.push({ t: "op", v: c }); i += 1; continue; }
+      i++;
+    }
+    return tokens;
+  }
+
+  class Parser {
+    constructor(tokens) { this.ts = tokens; this.pos = 0; }
+    peek() { return this.ts[this.pos]; }
+    next() { return this.ts[this.pos++]; }
+    parseExpr() { return this.parseOr(); }
+    parseOr() {
+      let a = this.parseAnd();
+      while (this.peek() && this.peek().t === "id" && (this.peek().n === "AND" || this.peek().n === "OR")) {
+        const op = this.next().n; const b = this.parseAnd();
+        a = { t: "bin", op: op === "AND" ? "AND" : "OR", a, b };
+      }
+      return a;
+    }
+    parseAnd() {
+      let a = this.parseCmp();
+      while (this.peek() && this.peek().t === "id" && this.peek().n === "AND") {
+        this.next(); const b = this.parseCmp(); a = { t: "bin", op: "AND", a, b };
+      }
+      return a;
+    }
+    parseCmp() {
+      let a = this.parseAdd();
+      while (this.peek() && this.peek().t === "op" && ["<", ">", "<=", ">=", "="].indexOf(this.peek().v) >= 0) {
+        const op = this.next().v; const b = this.parseAdd(); a = { t: "bin", op, a, b };
+      }
+      return a;
+    }
+    parseAdd() {
+      let a = this.parseMul();
+      while (this.peek() && this.peek().t === "op" && (this.peek().v === "+" || this.peek().v === "-")) {
+        const op = this.next().v; const b = this.parseMul(); a = { t: "bin", op, a, b };
+      }
+      return a;
+    }
+    parseMul() {
+      let a = this.parseUnary();
+      while (this.peek() && this.peek().t === "op" && (this.peek().v === "*" || this.peek().v === "/")) {
+        const op = this.next().v; const b = this.parseUnary(); a = { t: "bin", op, a, b };
+      }
+      return a;
+    }
+    parseUnary() {
+      if (this.peek() && this.peek().t === "op" && (this.peek().v === "-" || this.peek().v === "+")) {
+        const op = this.next().v; const a = this.parseUnary(); return { t: "neg", a };
+      }
+      return this.parsePrimary();
+    }
+    parsePrimary() {
+      const t = this.next();
+      if (t.t === "num") return { t: "num", v: t.v };
+      if (t.t === "str") return { t: "str", v: t.v };
+      if (t.t === "id") {
+        if (this.peek() && this.peek().t === "lparen") {
+          this.next();
+          const args = [];
+          if (!(this.peek() && this.peek().t === "rparen")) {
+            args.push(this.parseExpr());
+            while (this.peek() && this.peek().t === "comma") { this.next(); args.push(this.parseExpr()); }
+          }
+          this.next();
+          return { t: "call", f: t.n, args };
+        }
+        return { t: "id", n: t.n };
+      }
+      if (t.t === "lparen") { const e = this.parseExpr(); this.next(); return e; }
+      return { t: "num", v: 0 };
+    }
+  }
+
+  function getIdentSeq(name, ctx) {
+    if (DATA_NAMES[name]) return ctx.data[DATA_NAMES[name]];
+    return ctx.vars[name] || null;
+  }
+  function seriesOf(node, ctx) {
+    if (node.t === "id") return getIdentSeq(node.n, ctx);
+    return null;
+  }
+  function evalExpr(node, i, ctx) {
+    switch (node.t) {
+      case "num": return node.v;
+      case "str": return node.v;
+      case "id": {
+        const seq = getIdentSeq(node.n, ctx);
+        if (seq) return seq[i] !== undefined ? seq[i] : 0;
+        return 0;
+      }
+      case "neg": return -evalExpr(node.a, i, ctx);
+      case "bin": {
+        const a = evalExpr(node.a, i, ctx), b = evalExpr(node.b, i, ctx);
+        switch (node.op) {
+          case "+": return a + b;
+          case "-": return a - b;
+          case "*": return a * b;
+          case "/": return b ? a / b : 0;
+          case ">": return a > b ? 1 : 0;
+          case "<": return a < b ? 1 : 0;
+          case ">=": return a >= b ? 1 : 0;
+          case "<=": return a <= b ? 1 : 0;
+          case "=": return a === b ? 1 : 0;
+          case "AND": return (a && b) ? 1 : 0;
+          case "OR": return (a || b) ? 1 : 0;
+        }
+        return 0;
+      }
+      case "call": return evalCall(node, i, ctx);
+    }
+    return 0;
+  }
+  function evalCall(node, i, ctx) {
+    const f = String(node.f || "").toUpperCase();
+    const args = node.args || [];
+    if (["MA", "STD", "HHV", "LLV", "SUM"].indexOf(f) >= 0) {
+      const seq = seriesOf(args[0], ctx);
+      const n = Math.max(1, Math.round(evalExpr(args[1], i, ctx)) || 1);
+      if (!seq) return evalExpr(args[0], i, ctx);
+      const start = Math.max(0, i - n + 1);
+      const win = seq.slice(start, i + 1);
+      if (!win.length) return 0;
+      if (f === "HHV") return Math.max.apply(null, win);
+      if (f === "LLV") return Math.min.apply(null, win);
+      const s = win.reduce(function (a, b) { return a + b; }, 0);
+      if (f === "SUM") return s;
+      if (f === "MA") return s / win.length;
+      const avg = s / win.length;
+      const v = win.reduce(function (acc, x) { return acc + (x - avg) * (x - avg); }, 0);
+      return Math.sqrt(v / win.length);
+    }
+    if (f === "REF") {
+      const seq = seriesOf(args[0], ctx);
+      const n = Math.max(1, Math.round(evalExpr(args[1], i, ctx)) || 1);
+      if (!seq) return 0;
+      const j = i - n;
+      return (j >= 0 && seq[j] !== undefined) ? seq[j] : 0;
+    }
+    if (f === "CROSS") {
+      const a = seriesOf(args[0], ctx), b = seriesOf(args[1], ctx);
+      if (a && b) return (i > 0 && a[i] > b[i] && a[i - 1] <= b[i - 1]) ? 1 : 0;
+      return (i > 0 && evalExpr(args[0], i, ctx) > evalExpr(args[1], i, ctx) && evalExpr(args[0], i - 1, ctx) <= evalExpr(args[1], i - 1, ctx)) ? 1 : 0;
+    }
+    if (f === "ABS") return Math.abs(evalExpr(args[0], i, ctx));
+    if (f === "MAX") return Math.max(evalExpr(args[0], i, ctx), evalExpr(args[1], i, ctx));
+    if (f === "MIN") return Math.min(evalExpr(args[0], i, ctx), evalExpr(args[1], i, ctx));
+    if (f === "COUNT") {
+      const n = Math.max(1, Math.round(evalExpr(args[1], i, ctx)) || 1);
+      let c = 0;
+      for (let k = Math.max(0, i - n + 1); k <= i; k++) if (evalExpr(args[0], k, ctx)) c++;
+      return c;
+    }
+    if (f === "IF") return evalExpr(args[0], i, ctx) ? evalExpr(args[1], i, ctx) : evalExpr(args[2], i, ctx);
+    return evalExpr(args[0] || { t: "num", v: 0 }, i, ctx);
+  }
+
+  function parseStyles(tokens) {
+    let color = null, dash = false;
+    for (const t of tokens) {
+      const s = String(t.n || "").toLowerCase();
+      if (s.indexOf("color") === 0) {
+        const key = s.slice(5);
+        if (COLOR_MAP[key]) color = COLOR_MAP[key];
+      } else if (s === "dotline") dash = true;
+    }
+    return { color, dash };
+  }
+
+  function parseStatement(toks) {
+    if (toks[0] && toks[0].t === "id" && toks[0].n === "DRAWTEXT") {
+      const p = new Parser(toks);
+      p.next(); p.next();
+      const cond = p.parseExpr(); p.next();
+      const pos = p.parseExpr(); p.next();
+      const txt = p.next();
+      p.next();
+      const styles = [];
+      while (p.peek() && p.peek().t === "comma") { p.next(); styles.push(p.next()); }
+      const st = parseStyles(styles);
+      return { type: "drawtext", cond, pos, text: String(txt.v), color: st.color || "#e04343" };
+    }
+    if (toks[0] && toks[0].t === "id") {
+      const name = toks[0].n;
+      if (toks[1] && toks[1].t === "assign") {
+        const p = new Parser(toks); p.next(); p.next();
+        const expr = p.parseExpr();
+        return { type: "var", name, expr };
+      }
+      if (toks[1] && toks[1].t === "colon") {
+        const p = new Parser(toks); p.next(); p.next();
+        const expr = p.parseExpr();
+        const styles = [];
+        while (p.peek() && p.peek().t === "comma") { p.next(); styles.push(p.next()); }
+        const st = parseStyles(styles);
+        return { type: "line", name, expr, color: st.color, dash: st.dash };
+      }
+    }
+    const p = new Parser(toks);
+    const expr = p.parseExpr();
+    const styles = [];
+    while (p.peek() && p.peek().t === "comma") { p.next(); styles.push(p.next()); }
+    const st = parseStyles(styles);
+    return { type: "line", name: "", expr, color: st.color, dash: st.dash };
+  }
+
+  function parse(src) {
+    try {
+      const toks = tokenize(src);
+      const groups = [];
+      let cur = [];
+      for (const t of toks) {
+        if (t.t === "semi") { if (cur.length) { groups.push(cur); cur = []; } }
+        else cur.push(t);
+      }
+      if (cur.length) groups.push(cur);
+      const stmts = groups.map(parseStatement);
+      return { ok: true, stmts };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  function run(data, stmts) {
+    const n = data.length;
+    const cols = { close: [], open: [], high: [], low: [], volume: [] };
+    for (const k of data) {
+      cols.close.push(k.close);
+      cols.open.push(k.open);
+      cols.high.push(k.high);
+      cols.low.push(k.low);
+      cols.volume.push(k.volume || 0);
+    }
+    const vars = {};
+    const lines = [];
+    const texts = [];
+    const ctx = { data: cols, vars };
+    for (const st of stmts) {
+      if (st.type === "var") {
+        const arr = new Array(n);
+        for (let i = 0; i < n; i++) arr[i] = evalExpr(st.expr, i, ctx);
+        vars[st.name] = arr;
+      } else if (st.type === "line") {
+        const arr = new Array(n);
+        for (let i = 0; i < n; i++) arr[i] = evalExpr(st.expr, i, ctx);
+        lines.push({ name: st.name, series: arr, color: st.color, dash: st.dash });
+      } else if (st.type === "drawtext") {
+        const cond = new Array(n), pos = new Array(n);
+        for (let i = 0; i < n; i++) {
+          cond[i] = !!evalExpr(st.cond, i, ctx);
+          pos[i] = evalExpr(st.pos, i, ctx);
+        }
+        texts.push({ text: st.text, cond, pos, color: st.color });
+      }
+    }
+    return { n, lines, texts };
+  }
+
+  return { parse, run };
+})();
+
+/* ---------- K线绘制 ---------- */
+function setupCanvas(canvas, h) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.parentElement ? canvas.parentElement.clientWidth : (window.innerWidth - 20);
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+
+function drawMain(canvas, data) {
+  const { ctx, w, h } = setupCanvas(canvas, Math.max(220, Math.round(window.innerHeight * 0.42)));
+  ctx.fillStyle = "#10151c";
+  ctx.fillRect(0, 0, w, h);
+  const n = data.length;
+  if (!n) return;
+  const pad = 8, topPad = 18;
+  let hi = -Infinity, lo = Infinity;
+  for (const k of data) { if (k.high > hi) hi = k.high; if (k.low < lo) lo = k.low; }
+  const span = (hi - lo) || 1;
+  const y = (v) => topPad + (1 - (v - lo) / span) * (h - topPad - pad);
+  const cw = w / n;
+  const bw = Math.max(1, cw * 0.65);
+  for (let i = 0; i < n; i++) {
+    const k = data[i];
+    const x = i * cw + cw / 2;
+    const up = k.close >= k.open;
+    const col = up ? "#e04343" : "#35b86b";
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y(k.high));
+    ctx.lineTo(x, y(k.low));
+    ctx.stroke();
+    const yO = y(k.open), yC = y(k.close);
+    const top = Math.min(yO, yC), bh = Math.max(1, Math.abs(yO - yC));
+    ctx.fillStyle = col;
+    ctx.fillRect(x - bw / 2, top, bw, bh);
+  }
+  const last = data[n - 1];
+  ctx.fillStyle = "#ffd27a";
+  ctx.font = "11px sans-serif";
+  ctx.fillText("最新 " + last.close.toFixed(2) + "  " + last.date, 6, 12);
+}
+
+function drawSub(canvas, calc) {
+  const { ctx, w, h } = setupCanvas(canvas, Math.max(90, Math.round(window.innerHeight * 0.16)));
+  ctx.fillStyle = "#10151c";
+  ctx.fillRect(0, 0, w, h);
+  const n = calc.n;
+  if (!n) return;
+  const pad = 8, topPad = 6;
+  let lo = Infinity, hi = -Infinity;
+  calc.lines.forEach((ln) => ln.series.forEach((v) => { if (isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } }));
+  calc.texts.forEach((tx) => tx.pos.forEach((v) => { if (isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } }));
+  if (!isFinite(lo) || !isFinite(hi) || hi === lo) { lo = 0; hi = 1; }
+  const y = (v) => topPad + (1 - (v - lo) / (hi - lo)) * (h - topPad - pad);
+  const cw = w / n;
+  for (const ln of calc.lines) {
+    ctx.strokeStyle = ln.color || "#e04343";
+    ctx.lineWidth = 1;
+    ctx.setLineDash(ln.dash ? [3, 3] : []);
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < n; i++) {
+      const v = ln.series[i];
+      if (!isFinite(v)) { started = false; continue; }
+      const x = i * cw + cw / 2, yy = y(v);
+      if (!started) { ctx.moveTo(x, yy); started = true; } else ctx.lineTo(x, yy);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.font = "10px sans-serif";
+  for (const tx of calc.texts) {
+    ctx.fillStyle = tx.color || "#e04343";
+    for (let i = 0; i < n; i++) {
+      if (tx.cond[i] && isFinite(tx.pos[i])) {
+        ctx.fillText(tx.text, i * cw + cw / 2 - 3, y(tx.pos[i]) - 2);
+      }
+    }
+  }
+}
+
+/* ---------- K线页交互 ---------- */
+let currentKline = null;
+
+async function openKline(code, name) {
+  document.getElementById("klinePage").style.display = "flex";
+  document.getElementById("klineTitle").textContent = name + " " + code;
+  const loading = document.getElementById("klineLoading");
+  loading.style.display = "block";
+  loading.textContent = "K线数据加载中…";
+  const data = await fetchKlineFull(code, 150);
+  if (!data || !data.length) {
+    loading.textContent = "K线数据获取失败，请检查网络";
+    return;
+  }
+  loading.style.display = "none";
+  currentKline = { code, name, data };
+  renderKline();
+}
+
+function renderKline() {
+  if (!currentKline) return;
+  const data = currentKline.data;
+  const src = localStorage.getItem("xiji_formula") || DEFAULT_FORMULA;
+  const pf = XijiFormula.parse(src);
+  let calc = { n: data.length, lines: [], texts: [] };
+  document.getElementById("klineSubName").textContent = "自定义公式";
+  if (pf.ok) {
+    calc = XijiFormula.run(data, pf.stmts);
+  } else {
+    document.getElementById("klineSubName").textContent = "公式解析错误";
+  }
+  drawMain(document.getElementById("klineMain"), data);
+  drawSub(document.getElementById("klineSub"), calc);
+}
+
+function openFormulaEditor() {
+  document.getElementById("formulaText").value = localStorage.getItem("xiji_formula") || DEFAULT_FORMULA;
+  document.getElementById("formulaErr").textContent = "";
+  document.getElementById("formulaModal").style.display = "flex";
+}
+
+function saveFormula() {
+  const src = document.getElementById("formulaText").value;
+  const pf = XijiFormula.parse(src);
+  if (!pf.ok) {
+    document.getElementById("formulaErr").textContent = "公式解析失败：" + (pf.error || "语法错误");
+    return;
+  }
+  localStorage.setItem("xiji_formula", src);
+  document.getElementById("formulaModal").style.display = "none";
+  if (currentKline) renderKline();
+}
+
+document.getElementById("klineBack").addEventListener("click", () => { document.getElementById("klinePage").style.display = "none"; });
+document.getElementById("klineFormula").addEventListener("click", openFormulaEditor);
+document.getElementById("btnFormulaCancel").addEventListener("click", () => { document.getElementById("formulaModal").style.display = "none"; });
+document.getElementById("btnFormulaDefault").addEventListener("click", () => { document.getElementById("formulaText").value = DEFAULT_FORMULA; document.getElementById("formulaErr").textContent = ""; });
+document.getElementById("btnFormulaSave").addEventListener("click", saveFormula);
+
 /* ---------- 计算逻辑（移植自 Flask 后端） ---------- */
 function holdingMetrics(h) {
   h = Object.assign({}, h);
@@ -497,7 +972,7 @@ function renderHoldings() {
       <div class="h-del" data-id="${h.id}">删除</div>
       <div class="h-body">
         <div class="h-left">
-          <div class="h-name">${h.name} <span class="h-yield">股息 ${pct(h.dividend_yield * 100)}</span></div>
+          <div class="h-name">${h.name} <span class="kline-link" data-code="${h.code}" data-name="${h.name}">K线</span> <span class="h-yield">股息 ${pct(h.dividend_yield * 100)}</span></div>
           <div class="h-code">${h.code} · 持${fmt(h.shares, 0)}股 · 成本${fmt(h.cost_price, 3)} → 现价${fmt(h.current_price, 3)}</div>
           <div class="h-note">${h.note || ""} · 建仓${h.hold_date}（${h.hold_days}天）</div>
         </div>
@@ -527,6 +1002,13 @@ function initHoldingsTouch(box) {
   box.addEventListener("touchcancel", onHoldTouchCancel, { passive: false });
 
   box.addEventListener("click", (e) => {
+    const kl = e.target.closest(".kline-link");
+    if (kl) {
+      e.stopPropagation();
+      e.preventDefault();
+      openKline(kl.dataset.code, kl.dataset.name);
+      return;
+    }
     const delBtn = e.target.closest(".h-del");
     if (delBtn) {
       e.stopPropagation();
