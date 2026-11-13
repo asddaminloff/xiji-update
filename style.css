@@ -188,3 +188,54 @@ body {
   .h-card { flex-direction: column; }
   .h-right { text-align: left; }
 }
+
+/* K线入口 */
+.kline-link {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffd27a;
+  border: 1px solid #ffd27a;
+  border-radius: 8px;
+  vertical-align: middle;
+}
+
+/* K线视图页 */
+.kline-page {
+  position: fixed; inset: 0;
+  background: #10151c;
+  z-index: 200;
+  flex-direction: column;
+  display: none;
+}
+.kline-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #26313d;
+}
+.kline-title { flex: 1; font-size: 15px; font-weight: 700; color: #e8e8ee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kline-loading { text-align: center; color: #8fa3b8; font-size: 13px; padding: 24px 0; }
+.kline-chart { flex: 1; overflow-y: auto; padding: 4px 6px 12px; }
+.kline-sub-title { font-size: 12px; color: #8fa3b8; padding: 6px 2px 2px; }
+
+/* 公式编辑弹窗 */
+.formula-box textarea {
+  width: 100%;
+  height: 150px;
+  box-sizing: border-box;
+  background: #0e1117;
+  border: 1px solid #2c3e4e;
+  border-radius: 8px;
+  padding: 10px;
+  color: #e8e8ee;
+  font-size: 13px;
+  font-family: Consolas, Menlo, monospace;
+  line-height: 1.6;
+  outline: none;
+  resize: vertical;
+}
+.formula-box textarea:focus { border-color: #ffd27a; }
+.formula-err { color: #ef5350; font-size: 12px; min-height: 16px; padding: 2px; }
+.formula-hint { color: #8fa3b8; font-size: 11px; line-height: 1.6; margin-top: 4px; }
