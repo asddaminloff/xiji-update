@@ -93,6 +93,21 @@
   </section>
 </div>
 
+<!-- K线视图页 -->
+<div class="kline-page" id="klinePage" style="display:none">
+  <div class="kline-head">
+    <button class="btn ghost" id="klineBack">← 返回</button>
+    <span class="kline-title" id="klineTitle">-</span>
+    <button class="btn ghost" id="klineFormula">副图公式</button>
+  </div>
+  <div class="kline-loading" id="klineLoading">加载中…</div>
+  <div class="kline-chart">
+    <canvas id="klineMain"></canvas>
+    <div class="kline-sub-title">副图 · <span id="klineSubName">自定义公式</span></div>
+    <canvas id="klineSub"></canvas>
+  </div>
+</div>
+
 <!-- 编辑弹窗 -->
 <div class="modal" id="modal" style="display:none">
   <div class="modal-box">
@@ -112,6 +127,21 @@
       <button class="btn ghost" id="btnCancel">取消</button>
       <button class="btn danger" id="btnDelete" style="display:none">删除</button>
       <button class="btn" id="btnSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 副图公式编辑弹窗 -->
+<div class="modal" id="formulaModal" style="display:none">
+  <div class="modal-box formula-box">
+    <h3>副图公式编辑</h3>
+    <textarea id="formulaText" spellcheck="false" placeholder="输入通达信/同花顺风格公式，如&#10;MID:=MA(CLOSE,20);&#10;BOLLB:=(CLOSE-MID)/MID;"></textarea>
+    <div class="formula-err" id="formulaErr"></div>
+    <div class="formula-hint">支持：MA/STD/REF/CROSS/HHV/LLV/ABS/MAX/MIN/COUNT/IF，CLOSE/OPEN/HIGH/LOW/VOL，DRAWTEXT('文字')，colorred/colorgreen/colorblack/colorgray，DOTLINE</div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="btnFormulaCancel">取消</button>
+      <button class="btn ghost" id="btnFormulaDefault">恢复默认</button>
+      <button class="btn" id="btnFormulaSave">保存并应用</button>
     </div>
   </div>
 </div>
