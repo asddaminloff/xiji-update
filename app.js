@@ -653,29 +653,62 @@ function drawMain(canvas, data, view, xh) {
   });
 }
 
-function drawSub(canvas, calc) {
+function drawSub(canvas, calc, view, xh) {
   const { ctx, w, h } = setupCanvas(canvas, Math.max(90, Math.round(window.innerHeight * 0.16)));
   ctx.fillStyle = "#10151c";
   ctx.fillRect(0, 0, w, h);
   const n = calc.n;
   if (!n) return;
+  const start = Math.max(0, Math.min(view.end - view.count + 1, n - 1));
+  const end = Math.min(n - 1, view.end);
+  const cnt = end - start + 1;
   const pad = 8, topPad = 6;
   let lo = Infinity, hi = -Infinity;
-  calc.lines.forEach((ln) => ln.series.forEach((v) => { if (isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } }));
-  calc.texts.forEach((tx) => tx.pos.forEach((v) => { if (isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } }));
+  for (let i = start; i <= end; i++) {
+    calc.lines.forEach((ln) => { const v = ln.series[i]; if (isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } });
+    calc.texts.forEach((tx) => { const v = tx.pos[i]; if (isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } });
+  }
+  // 三根自适应虚线基准（随波动推算的参考刻度）
+  const REF_LINES = [0.357, 0.83, 1.3];
   if (!isFinite(lo) || !isFinite(hi) || hi === lo) { lo = 0; hi = 1; }
-  const y = (v) => topPad + (1 - (v - lo) / (hi - lo)) * (h - topPad - pad);
-  const cw = w / n;
+  if (hi < 1.3) hi = 1.3;
+  if (lo > 0) lo = 0;
+  const span = (hi - lo) || 1;
+  const y = (v) => topPad + (1 - (v - lo) / span) * (h - topPad - pad);
+  const cw = w / cnt;
+  // 坐标系：水平网格 + 右侧刻度
+  ctx.lineWidth = 1;
+  ctx.font = "9px sans-serif";
+  const GRID = 4;
+  for (let g = 0; g <= GRID; g++) {
+    const v = lo + (hi - lo) * g / GRID;
+    const yy = y(v);
+    ctx.strokeStyle = "rgba(138,163,184,0.14)";
+    ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
+    ctx.fillStyle = "#8fa3b8";
+    ctx.fillText(v.toFixed(2), Math.max(0, w - 36), yy - 3);
+  }
+  // 三根自适应虚线（+0.357 / +0.83 / +1.3）
+  for (const rv of REF_LINES) {
+    const yy = y(rv);
+    ctx.strokeStyle = "rgba(255,210,122,0.55)";
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#ffd27a";
+    ctx.fillText((rv >= 0 ? "+" : "") + rv.toFixed(3), Math.max(0, w - 36), yy - 3);
+  }
+  // 公式输出线
   for (const ln of calc.lines) {
     ctx.strokeStyle = ln.color || "#e04343";
     ctx.lineWidth = 1;
     ctx.setLineDash(ln.dash ? [3, 3] : []);
     ctx.beginPath();
     let started = false;
-    for (let i = 0; i < n; i++) {
+    for (let i = start; i <= end; i++) {
       const v = ln.series[i];
       if (!isFinite(v)) { started = false; continue; }
-      const x = i * cw + cw / 2, yy = y(v);
+      const x = (i - start) * cw + cw / 2, yy = y(v);
       if (!started) { ctx.moveTo(x, yy); started = true; } else ctx.lineTo(x, yy);
     }
     ctx.stroke();
@@ -684,12 +717,59 @@ function drawSub(canvas, calc) {
   ctx.font = "10px sans-serif";
   for (const tx of calc.texts) {
     ctx.fillStyle = tx.color || "#e04343";
-    for (let i = 0; i < n; i++) {
+    for (let i = start; i <= end; i++) {
       if (tx.cond[i] && isFinite(tx.pos[i])) {
-        ctx.fillText(tx.text, i * cw + cw / 2 - 3, y(tx.pos[i]) - 2);
+        ctx.fillText(tx.text, (i - start) * cw + cw / 2 - 3, y(tx.pos[i]) - 2);
       }
     }
   }
+  if (xh && xh.show) drawCrosshair(ctx, w, h, start, cw, xh, {
+    getX: (i) => (i - start) * cw + cw / 2,
+    valueAtY: (yy) => lo + (1 - (yy - topPad) / (h - topPad - pad)) * span,
+    fmt: (v) => v.toFixed(3),
+  });
+}
+
+/* ---------- 十字光标通用绘制 ---------- */
+function drawCrosshair(ctx, w, h, start, cw, xh, opt) {
+  const idx = xh.idx;
+  if (idx < 0) return;
+  const x = opt.getX(idx);
+  if (x < 0 || x > w) return;
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.5)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(x, 0); ctx.lineTo(x, h);
+  ctx.moveTo(0, xh.y); ctx.lineTo(w, xh.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const val = opt.valueAtY(xh.y);
+  const label = opt.fmt(val);
+  ctx.font = "10px sans-serif";
+  const tw = ctx.measureText(label).width + 8;
+  const lx = Math.min(Math.max(x + 3, 0), w - tw - 2);
+  ctx.fillStyle = "#ffd27a";
+  ctx.fillRect(lx, xh.y - 10, tw, 16);
+  ctx.fillStyle = "#10151c";
+  ctx.fillText(label, lx + 4, xh.y + 3);
+  ctx.restore();
+}
+
+function crosshairSubVals() {
+  const ck = currentKline;
+  if (!ck || !ck.calc || !ck.calc.lines.length || !ck.xh) return "";
+  const idx = ck.xh.idx;
+  if (idx < 0) return "";
+  const boll = ck.calc.lines.find((l) => /BOLLB/i.test(l.name || ""));
+  const wid = ck.calc.lines.find((l) => /WIDTH/i.test(l.name || ""));
+  const bv = boll && boll.series[idx] !== undefined ? boll.series[idx] : NaN;
+  const wv = wid && wid.series[idx] !== undefined ? wid.series[idx] : NaN;
+  const parts = [];
+  if (isFinite(bv)) parts.push("BOLLB " + bv.toFixed(3));
+  if (isFinite(wv)) parts.push("W " + wv.toFixed(3));
+  return parts.join("  ");
 }
 
 /* ---------- K线页交互 ---------- */
