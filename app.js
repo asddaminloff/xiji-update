@@ -668,35 +668,37 @@ function drawSub(canvas, calc, view, xh) {
     calc.lines.forEach((ln) => { const v = ln.series[i]; if (isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } });
     calc.texts.forEach((tx) => { const v = tx.pos[i]; if (isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } });
   }
-  // 三根自适应虚线基准（随波动推算的参考刻度）
-  const REF_LINES = [0.357, 0.83, 1.3];
+  // 三根参考虚线：随当前视窗 BOLLB 值域动态滚动（不再固定 0.357/0.83/1.3）
+  const bollLine = calc.lines.find((l) => /BOLLB/i.test(l.name || ""));
+  let vMin = Infinity, vMax = -Infinity;
+  if (bollLine) {
+    for (let i = start; i <= end; i++) {
+      const v = bollLine.series[i];
+      if (isFinite(v)) { if (v < vMin) vMin = v; if (v > vMax) vMax = v; }
+    }
+  }
+  const REF_BASE = [0.357, 0.83, 1.3];
+  let REF_LINES;
+  if (isFinite(vMin) && isFinite(vMax) && vMax > vMin) {
+    REF_LINES = REF_BASE.map((x) => vMin + (vMax - vMin) * (x / 1.3));
+  } else {
+    REF_LINES = REF_BASE.slice();
+  }
   if (!isFinite(lo) || !isFinite(hi) || hi === lo) { lo = 0; hi = 1; }
-  if (hi < 1.3) hi = 1.3;
-  if (lo > 0) lo = 0;
   const span = (hi - lo) || 1;
   const y = (v) => topPad + (1 - (v - lo) / span) * (h - topPad - pad);
   const cw = w / cnt;
-  // 坐标系：水平网格 + 右侧刻度
-  ctx.lineWidth = 1;
+  // 仅三根参考虚线（无网格、无固定刻度），随缩放/平移周期持续滚动
   ctx.font = "9px sans-serif";
-  const GRID = 4;
-  for (let g = 0; g <= GRID; g++) {
-    const v = lo + (hi - lo) * g / GRID;
-    const yy = y(v);
-    ctx.strokeStyle = "rgba(138,163,184,0.14)";
-    ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
-    ctx.fillStyle = "#8fa3b8";
-    ctx.fillText(v.toFixed(2), Math.max(0, w - 36), yy - 3);
-  }
-  // 三根自适应虚线（+0.357 / +0.83 / +1.3）
   for (const rv of REF_LINES) {
+    if (!isFinite(rv)) continue;
     const yy = y(rv);
     ctx.strokeStyle = "rgba(255,210,122,0.55)";
     ctx.setLineDash([4, 3]);
     ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = "#ffd27a";
-    ctx.fillText((rv >= 0 ? "+" : "") + rv.toFixed(3), Math.max(0, w - 36), yy - 3);
+    ctx.fillText((rv >= 0 ? "+" : "") + rv.toFixed(3), Math.max(0, w - 40), yy - 3);
   }
   // 公式输出线
   for (const ln of calc.lines) {
@@ -832,9 +834,11 @@ document.getElementById("btnFormulaCancel").addEventListener("click", () => { do
 document.getElementById("btnFormulaDefault").addEventListener("click", () => { document.getElementById("formulaText").value = DEFAULT_FORMULA; document.getElementById("formulaErr").textContent = ""; });
 document.getElementById("btnFormulaSave").addEventListener("click", saveFormula);
 
-/* ---------- K线手势：十字光标 / 平移 / 双指缩放（v2.3） ---------- */
+/* ---------- K线手势：长按十字光标 / 快速滑动平移 / 双指缩放（v2.4） ---------- */
 const KLINE_DEF_COUNT = 120;
 const KLINE_MIN_COUNT = 30;
+const KLINE_LONG_MS = 300;
+const KLINE_SLOP = 8;
 let klineGesture = null;
 
 function klineChartRect() { return document.getElementById("klineChart").getBoundingClientRect(); }
@@ -848,11 +852,25 @@ function klineIndexAtX(x, view, cnt) {
   return Math.max(start, Math.min(end, i));
 }
 
+function klineLongPress() {
+  const g = klineGesture;
+  if (!g || g.mode !== "wait") return;
+  g.mode = "cross";
+  const rect = klineChartRect();
+  const view = currentKline.view;
+  const n = currentKline.data.length;
+  const cnt = Math.max(1, Math.min(view.count, n));
+  const idx = klineIndexAtX(g.x - rect.left, view, cnt);
+  currentKline.xh = { idx, show: true, y: g.y };
+  klineRedraw();
+}
+
 function klineTouchStart(e) {
   if (!currentKline || !e.target.closest("canvas")) return;
   const t = e.touches;
   e.preventDefault();
   if (t.length >= 2) {
+    if (klineGesture && klineGesture.timer) clearTimeout(klineGesture.timer);
     const rect = klineChartRect();
     const cx = (t[0].clientX + t[1].clientX) / 2 - rect.left;
     const dist = Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
@@ -865,14 +883,17 @@ function klineTouchStart(e) {
     const frac = Math.max(0, Math.min(1, ((idx - start) * cw + cw / 2) / rect.width));
     klineGesture = { mode: "pinch", dist, idx, frac, count: view.count, end: view.end };
   } else {
+    if (klineGesture && klineGesture.timer) clearTimeout(klineGesture.timer);
     const rect = klineChartRect();
-    klineGesture = { mode: "x", x: t[0].clientX, end: currentKline.view.end };
-    const x = t[0].clientX - rect.left;
-    const view = currentKline.view;
-    const n = currentKline.data.length;
-    const cnt = Math.max(1, Math.min(view.count, n));
-    const idx = klineIndexAtX(x, view, cnt);
-    currentKline.xh = { idx, show: true, y: t[0].clientY - rect.top };
+    currentKline.xh = null;
+    klineGesture = {
+      mode: "wait",
+      x: t[0].clientX,
+      y: t[0].clientY - rect.top,
+      end: currentKline.view.end,
+      moved: false,
+    };
+    klineGesture.timer = setTimeout(klineLongPress, KLINE_LONG_MS);
     klineRedraw();
   }
 }
@@ -886,7 +907,8 @@ function klineTouchMove(e) {
   if (klineGesture.mode === "pinch" && t.length >= 2) {
     const dist = Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
     const k = dist / klineGesture.dist;
-    let count = Math.max(KLINE_MIN_COUNT, Math.min(n, Math.round(klineGesture.count * k)));
+    // v2.4：双指逻辑反向——张开=放大(根数变少)、捏拢=缩小(根数变多)
+    let count = Math.max(KLINE_MIN_COUNT, Math.min(n, Math.round(klineGesture.count / k)));
     const view = currentKline.view;
     const endMax = n - 1;
     let start1 = Math.round(klineGesture.idx - (klineGesture.frac * count - 0.5));
@@ -896,7 +918,18 @@ function klineTouchMove(e) {
     view.count = end1 - start1 + 1;
     view.end = end1;
     klineRedraw();
-  } else if (klineGesture.mode === "x" && t.length === 1) {
+  } else if (klineGesture.mode === "wait" && t.length === 1) {
+    const dx = t[0].clientX - klineGesture.x;
+    const dy = t[0].clientY - klineGesture.y;
+    if (Math.hypot(dx, dy) > KLINE_SLOP) {
+      clearTimeout(klineGesture.timer);
+      klineGesture.mode = "pan";
+      klineGesture.x = t[0].clientX;   // 进入平移时重置起点，避免跳变
+      klineGesture.y = t[0].clientY;
+      currentKline.xh = null;
+      klineRedraw();
+    }
+  } else if (klineGesture.mode === "pan" && t.length === 1) {
     const view = currentKline.view;
     const cnt = Math.max(1, Math.min(view.count, n));
     const cw = rect.width / cnt;
@@ -906,6 +939,11 @@ function klineTouchMove(e) {
     const start1 = Math.max(0, Math.min(end1 - cnt + 1, n - 1));
     end1 = start1 + cnt - 1;
     view.end = end1;
+    klineRedraw();
+  } else if (klineGesture.mode === "cross" && t.length === 1) {
+    // 十字光标模式：只移动十字光标，不平移主图
+    const view = currentKline.view;
+    const cnt = Math.max(1, Math.min(view.count, n));
     const idx = klineIndexAtX(t[0].clientX - rect.left, view, cnt);
     currentKline.xh = { idx, show: true, y: t[0].clientY - rect.top };
     klineRedraw();
@@ -913,6 +951,14 @@ function klineTouchMove(e) {
 }
 
 function klineTouchEnd() {
+  const g = klineGesture;
+  if (g && g.timer) clearTimeout(g.timer);
+  if (g && g.mode === "cross" && currentKline) {
+    // 长按抬起后十字光标保留，方便查看；再次点击会清除
+  } else if (g && g.mode === "pan" && currentKline) {
+    currentKline.xh = null;
+    klineRedraw();
+  }
   klineGesture = null;
 }
 
