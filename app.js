@@ -262,14 +262,26 @@ DRAWTEXT(S条件,BOLLB*1.05,'S'),colorgreen;
 0.5,colorgray,DOTLINE;
 1,colorgray,DOTLINE;`;
 
-async function fetchKlineFull(code, days) {
+async function fetchKlineFull(code) {
   try {
-    const url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=" + symbolOf(code) + ",day,,," + days + ",qfq";
-    const r = await fetch(url);
-    const j = await r.json();
-    const d = (j.data || {})[symbolOf(code)] || {};
-    const klines = d.qfqday || d.day || [];
-    return klines.map((k) => ({
+    const sym = symbolOf(code);
+    const out = [];
+    let end = "";
+    for (let round = 0; round < 6; round++) {
+      const url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=" + sym + ",day,," + end + ",800,qfq";
+      const r = await fetch(url);
+      const j = await r.json();
+      const d = (j.data || {})[sym] || {};
+      const klines = d.qfqday || d.day || [];
+      if (!klines || !klines.length) break;
+      for (const k of klines) out.push(k);
+      if (out.length >= 2600 || klines.length < 800) break;
+      end = String(klines[0][0]);
+    }
+    const seen = {};
+    const dedup = out.filter((k) => { const key = String(k[0]); if (seen[key]) return false; seen[key] = true; return true; });
+    dedup.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    return dedup.map((k) => ({
       date: String(k[0]),
       open: parseFloat(k[1]),
       close: parseFloat(k[2]),
@@ -587,22 +599,25 @@ function setupCanvas(canvas, h) {
   return { ctx, w, h };
 }
 
-function drawMain(canvas, data) {
+function drawMain(canvas, data, view, xh) {
   const { ctx, w, h } = setupCanvas(canvas, Math.max(220, Math.round(window.innerHeight * 0.42)));
   ctx.fillStyle = "#10151c";
   ctx.fillRect(0, 0, w, h);
   const n = data.length;
   if (!n) return;
-  const pad = 8, topPad = 18;
+  const start = Math.max(0, Math.min(view.end - view.count + 1, n - 1));
+  const end = Math.min(n - 1, view.end);
+  const cnt = end - start + 1;
+  const pad = 8, topPad = 20;
   let hi = -Infinity, lo = Infinity;
-  for (const k of data) { if (k.high > hi) hi = k.high; if (k.low < lo) lo = k.low; }
+  for (let i = start; i <= end; i++) { const k = data[i]; if (k.high > hi) hi = k.high; if (k.low < lo) lo = k.low; }
   const span = (hi - lo) || 1;
   const y = (v) => topPad + (1 - (v - lo) / span) * (h - topPad - pad);
-  const cw = w / n;
-  const bw = Math.max(1, cw * 0.65);
-  for (let i = 0; i < n; i++) {
+  const cw = w / cnt;
+  const bw = Math.max(1, Math.min(cw * 0.68, 14));
+  for (let i = start; i <= end; i++) {
     const k = data[i];
-    const x = i * cw + cw / 2;
+    const x = (i - start) * cw + cw / 2;
     const up = k.close >= k.open;
     const col = up ? "#e04343" : "#35b86b";
     ctx.strokeStyle = col;
@@ -616,10 +631,26 @@ function drawMain(canvas, data) {
     ctx.fillStyle = col;
     ctx.fillRect(x - bw / 2, top, bw, bh);
   }
-  const last = data[n - 1];
+  // 顶部信息：默认显示最新，十字光标按下时显示当日开/收/涨跌幅 + BOLL副图值
+  const infoIdx = (xh && xh.show && xh.idx >= start && xh.idx <= end) ? xh.idx : end;
+  const k = data[infoIdx];
+  const prev = infoIdx > 0 ? data[infoIdx - 1] : null;
+  const pct = prev && prev.close ? (k.close - prev.close) / prev.close : null;
+  const pctStr = pct === null ? "--" : (pct >= 0 ? "+" : "") + (pct * 100).toFixed(2) + "%";
+  let info = "最新 " + k.close.toFixed(2) + "  " + k.date;
+  if (xh && xh.show && xh.idx >= start && xh.idx <= end) {
+    info = k.date + "  开 " + k.open.toFixed(2) + "  收 " + k.close.toFixed(2) + "  " + pctStr;
+    const subVals = crosshairSubVals();
+    if (subVals) info += "  " + subVals;
+  }
   ctx.fillStyle = "#ffd27a";
   ctx.font = "11px sans-serif";
-  ctx.fillText("最新 " + last.close.toFixed(2) + "  " + last.date, 6, 12);
+  ctx.fillText(info, 6, 12);
+  if (xh && xh.show) drawCrosshair(ctx, w, h, start, cw, xh, {
+    getX: (i) => (i - start) * cw + cw / 2,
+    valueAtY: (yy) => lo + (1 - (yy - topPad) / (h - topPad - pad)) * span,
+    fmt: (v) => v.toFixed(2),
+  });
 }
 
 function drawSub(canvas, calc) {
@@ -670,13 +701,13 @@ async function openKline(code, name) {
   const loading = document.getElementById("klineLoading");
   loading.style.display = "block";
   loading.textContent = "K线数据加载中…";
-  const data = await fetchKlineFull(code, 150);
+  const data = await fetchKlineFull(code);
   if (!data || !data.length) {
     loading.textContent = "K线数据获取失败，请检查网络";
     return;
   }
   loading.style.display = "none";
-  currentKline = { code, name, data };
+  currentKline = { code, name, data, view: { end: data.length - 1, count: KLINE_DEF_COUNT }, xh: { idx: -1, show: false, y: 0 } };
   renderKline();
 }
 
@@ -692,8 +723,9 @@ function renderKline() {
   } else {
     document.getElementById("klineSubName").textContent = "公式解析错误";
   }
-  drawMain(document.getElementById("klineMain"), data);
-  drawSub(document.getElementById("klineSub"), calc);
+  currentKline.calc = calc;
+  drawMain(document.getElementById("klineMain"), data, currentKline.view, currentKline.xh);
+  drawSub(document.getElementById("klineSub"), calc, currentKline.view, currentKline.xh);
 }
 
 function openFormulaEditor() {
@@ -719,6 +751,102 @@ document.getElementById("klineFormula").addEventListener("click", openFormulaEdi
 document.getElementById("btnFormulaCancel").addEventListener("click", () => { document.getElementById("formulaModal").style.display = "none"; });
 document.getElementById("btnFormulaDefault").addEventListener("click", () => { document.getElementById("formulaText").value = DEFAULT_FORMULA; document.getElementById("formulaErr").textContent = ""; });
 document.getElementById("btnFormulaSave").addEventListener("click", saveFormula);
+
+/* ---------- K线手势：十字光标 / 平移 / 双指缩放（v2.3） ---------- */
+const KLINE_DEF_COUNT = 120;
+const KLINE_MIN_COUNT = 30;
+let klineGesture = null;
+
+function klineChartRect() { return document.getElementById("klineChart").getBoundingClientRect(); }
+
+function klineIndexAtX(x, view, cnt) {
+  const n = currentKline.data.length;
+  const start = Math.max(0, Math.min(view.end - view.count + 1, n - 1));
+  const end = Math.min(n - 1, view.end);
+  const cw = klineChartRect().width / cnt;
+  const i = start + Math.floor(x / cw);
+  return Math.max(start, Math.min(end, i));
+}
+
+function klineTouchStart(e) {
+  if (!currentKline || !e.target.closest("canvas")) return;
+  const t = e.touches;
+  e.preventDefault();
+  if (t.length >= 2) {
+    const rect = klineChartRect();
+    const cx = (t[0].clientX + t[1].clientX) / 2 - rect.left;
+    const dist = Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const view = currentKline.view;
+    const n = currentKline.data.length;
+    const cnt = Math.max(1, Math.min(view.count, n));
+    const start = Math.max(0, Math.min(view.end - cnt + 1, n - 1));
+    const cw = rect.width / cnt;
+    const idx = Math.max(start, Math.min(Math.min(n - 1, view.end), start + Math.floor(cx / cw)));
+    const frac = Math.max(0, Math.min(1, ((idx - start) * cw + cw / 2) / rect.width));
+    klineGesture = { mode: "pinch", dist, idx, frac, count: view.count, end: view.end };
+  } else {
+    const rect = klineChartRect();
+    klineGesture = { mode: "x", x: t[0].clientX, end: currentKline.view.end };
+    const x = t[0].clientX - rect.left;
+    const view = currentKline.view;
+    const n = currentKline.data.length;
+    const cnt = Math.max(1, Math.min(view.count, n));
+    const idx = klineIndexAtX(x, view, cnt);
+    currentKline.xh = { idx, show: true, y: t[0].clientY - rect.top };
+    klineRedraw();
+  }
+}
+
+function klineTouchMove(e) {
+  if (!currentKline || !klineGesture) return;
+  const t = e.touches;
+  const rect = klineChartRect();
+  e.preventDefault();
+  const n = currentKline.data.length;
+  if (klineGesture.mode === "pinch" && t.length >= 2) {
+    const dist = Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const k = dist / klineGesture.dist;
+    let count = Math.max(KLINE_MIN_COUNT, Math.min(n, Math.round(klineGesture.count * k)));
+    const view = currentKline.view;
+    const endMax = n - 1;
+    let start1 = Math.round(klineGesture.idx - (klineGesture.frac * count - 0.5));
+    let end1 = start1 + count - 1;
+    if (end1 > endMax) { end1 = endMax; start1 = end1 - count + 1; }
+    if (start1 < 0) { start1 = 0; end1 = Math.min(endMax, start1 + count - 1); }
+    view.count = end1 - start1 + 1;
+    view.end = end1;
+    klineRedraw();
+  } else if (klineGesture.mode === "x" && t.length === 1) {
+    const view = currentKline.view;
+    const cnt = Math.max(1, Math.min(view.count, n));
+    const cw = rect.width / cnt;
+    const dx = t[0].clientX - klineGesture.x;
+    const dIdx = Math.round(dx / cw);
+    let end1 = klineGesture.end - dIdx;
+    const start1 = Math.max(0, Math.min(end1 - cnt + 1, n - 1));
+    end1 = start1 + cnt - 1;
+    view.end = end1;
+    const idx = klineIndexAtX(t[0].clientX - rect.left, view, cnt);
+    currentKline.xh = { idx, show: true, y: t[0].clientY - rect.top };
+    klineRedraw();
+  }
+}
+
+function klineTouchEnd() {
+  klineGesture = null;
+}
+
+function klineRedraw() {
+  const ck = currentKline;
+  drawMain(document.getElementById("klineMain"), ck.data, ck.view, ck.xh);
+  drawSub(document.getElementById("klineSub"), ck.calc || { n: ck.data.length, lines: [], texts: [] }, ck.view, ck.xh);
+}
+
+const klineChartEl = document.getElementById("klineChart");
+klineChartEl.addEventListener("touchstart", klineTouchStart, { passive: false });
+klineChartEl.addEventListener("touchmove", klineTouchMove, { passive: false });
+klineChartEl.addEventListener("touchend", klineTouchEnd);
+klineChartEl.addEventListener("touchcancel", klineTouchEnd);
 
 /* ---------- 计算逻辑（移植自 Flask 后端） ---------- */
 function holdingMetrics(h) {
